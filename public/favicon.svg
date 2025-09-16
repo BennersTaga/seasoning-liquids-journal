@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Seasoning droplet">
+  <defs>
+    <linearGradient id="droplet" x1="0%" x2="0%" y1="0%" y2="100%">
+      <stop offset="0%" stop-color="#fb923c" />
+      <stop offset="100%" stop-color="#f97316" />
+    </linearGradient>
+  </defs>
+  <path d="M32 4C20 20 14 30 14 38c0 9.941 8.059 18 18 18s18-8.059 18-18c0-8-6-18-18-34z" fill="url(#droplet)" stroke="#7c2d12" stroke-width="2"/>
+  <circle cx="26" cy="28" r="4" fill="#fff7ed" opacity="0.6" />
+</svg>
