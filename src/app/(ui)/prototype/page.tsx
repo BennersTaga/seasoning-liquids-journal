@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useMemo, useState, useEffect, useCallback } from "react";
-import { useSWRConfig } from "swr";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,11 +14,9 @@ import { Plus, Package, Warehouse, Archive, Beaker, Factory, Trash2, Boxes, Chef
 import { format } from "date-fns";
 import { apiPost } from "@/lib/gas";
 import { useMasters } from "@/hooks/useMasters";
-import { useOrders, ordersKey } from "@/hooks/useOrders";
-import { useStorageAgg, storageAggKey } from "@/hooks/useStorageAgg";
+import { useOrders, refreshOrders } from "@/hooks/useOrders";
+import { useStorageAgg, refreshStorage } from "@/hooks/useStorageAgg";
 import type { Masters, OrderRow, StorageAggRow } from "@/lib/sheets/types";
-
-const USE_REMOTE = process.env.NEXT_PUBLIC_USE_SHEETS === '1';
 
 type FlavorRecipeItem = { ingredient: string; qty: number; unit: string };
 interface FlavorWithRecipe {
@@ -101,9 +98,8 @@ function deriveDataFromMasters(masters?: Masters) {
 }
 
 export default function App(){
-  const { mutate } = useSWRConfig();
   const [tab,setTab]=useState("office");
-  const mastersQuery = useMasters(USE_REMOTE);
+  const mastersQuery = useMasters();
   const mastersData = mastersQuery?.data;
   const { factories, storageByFactory, flavors, oemList } = useMemo(() => deriveDataFromMasters(mastersData), [mastersData]);
 
@@ -134,26 +130,25 @@ export default function App(){
       setStorage(prev=>[...prev,{lotId:lot,factoryCode,flavorId,location:leftover.loc,grams:leftover.grams,manufacturedAt}]);
     }
     setOnsiteSeq(s=>s+1);
-    if(USE_REMOTE){
-      try {
-        await apiPost("onsite-make", {
-          factory_code: factoryCode,
-          flavor_id: flavorId,
-          use_type: useType,
-          produced_grams: producedG,
-          manufactured_at: manufacturedAt,
-          oem_partner: oemPartner ?? null,
-          leftover: leftover ? { location: leftover.loc, grams: leftover.grams } : null,
-        });
-        await Promise.all([
-          mutate(ordersKey(factoryCode)),
-          mutate(storageAggKey(factoryCode)),
-        ]);
-      } catch (err) {
-        console.error(err);
-      }
+    try {
+      await apiPost("onsite-make", {
+        factory_code: factoryCode,
+        flavor_id: flavorId,
+        use_type: useType,
+        produced_grams: producedG,
+        manufactured_at: manufacturedAt,
+        oem_partner: oemPartner ?? null,
+        leftover: leftover ? { location: leftover.loc, grams: leftover.grams } : null,
+      });
+      await Promise.all([
+        refreshOrders(factoryCode),
+        refreshStorage(factoryCode),
+      ]);
+    } catch (err) {
+      console.error(err);
+      alert("通信に失敗しました");
     }
-  },[mutate,onsiteSeq]);
+  },[onsiteSeq]);
 
   return (<div className="min-h-screen bg-orange-50 p-6 mx-auto max-w-7xl space-y-6"><header className="flex items-center justify-between"><h1 className="text-2xl font-semibold">調味液日報 UI プロトタイプ</h1><div className="text-sm opacity-80">タブで「オフィス / 現場」を切替</div></header>
     <Tabs value={tab} onValueChange={setTab}><TabsList className="grid grid-cols-2 w-full md:w-96"><TabsTrigger value="office" className="flex gap-2"><Factory className="h-4 w-4"/>オフィス（5F/管理）</TabsTrigger><TabsTrigger value="floor" className="flex gap-2"><Boxes className="h-4 w-4"/>現場（フロア）</TabsTrigger></TabsList>
@@ -164,7 +159,6 @@ export default function App(){
 }
 
 function Office({orders,setOrders,seq,setSeq,factories,flavors,oemList,findFlavor}:{orders:OrderCard[];setOrders:React.Dispatch<React.SetStateAction<OrderCard[]>>;seq:number;setSeq:React.Dispatch<React.SetStateAction<number>>;factories:{code:string;name:string}[];flavors:FlavorWithRecipe[];oemList:string[];findFlavor:(id:string)=>FlavorWithRecipe;}){
-  const { mutate } = useSWRConfig();
   const [factory,setFactory]=useState(factories[0]?.code ?? ""); const [flavor,setFlavor]=useState(flavors[0]?.id ?? ""); const [useType,setUseType]=useState<'fissule'|'oem'>('fissule'); const [packs,setPacks]=useState(100); const [oemPartner,setOemPartner]=useState(oemList[0] ?? ""); const [oemGrams,setOemGrams]=useState(0);
 
   useEffect(()=>{ if(factories.length && !factories.some(f=>f.code===factory)){ setFactory(factories[0].code);} },[factories,factory]);
@@ -189,27 +183,26 @@ function Office({orders,setOrders,seq,setSeq,factories,flavors,oemList,findFlavo
     const newOrder:OrderCard={orderId:`O-${String(seq).padStart(3,"0")}`,lotId:lot,factoryCode:factory,orderedAt:format(today,"yyyy-MM-dd"),lines:[line]};
     setOrders(prev=>[newOrder,...prev]);
     setSeq(n=>n+1);
-    if(USE_REMOTE){
-      try {
-        await apiPost("orders-create", {
-          factory_code: factory,
-          lot_id: lot,
-          ordered_at: format(today,"yyyy-MM-dd"),
-          lines: [
-            {
-              flavor_id: line.flavorId,
-              use_type: line.useType,
-              packs: line.packs ?? 0,
-              required_grams: line.requiredGrams,
-              oem_partner: line.oemPartner ?? null,
-              oem_grams: line.oemGrams ?? null,
-            },
-          ],
-        });
-        await mutate(ordersKey(factory));
-      } catch (err) {
-        console.error(err);
-      }
+    try {
+      await apiPost("orders-create", {
+        factory_code: factory,
+        lot_id: lot,
+        ordered_at: format(today,"yyyy-MM-dd"),
+        lines: [
+          {
+            flavor_id: line.flavorId,
+            use_type: line.useType,
+            packs: line.packs ?? 0,
+            required_grams: line.requiredGrams,
+            oem_partner: line.oemPartner ?? null,
+            oem_grams: line.oemGrams ?? null,
+          },
+        ],
+      });
+      await refreshOrders(factory);
+    } catch (err) {
+      console.error(err);
+      alert("通信に失敗しました");
     }
   };
 
@@ -249,17 +242,16 @@ function Office({orders,setOrders,seq,setSeq,factories,flavors,oemList,findFlavo
 }
 
 function Floor({orders,setOrders,storage,setStorage,registerOnsiteMake,splitLogs,setSplitLogs,factories,flavors,findFlavor,storageByFactory,oemList,calcExpiry}:{orders:OrderCard[];setOrders:React.Dispatch<React.SetStateAction<OrderCard[]>>;storage:StorageEntry[];setStorage:React.Dispatch<React.SetStateAction<StorageEntry[]>>;registerOnsiteMake:(factoryCode:string,flavorId:string,useType:'fissule'|'oem',producedG:number,manufacturedAt:string,oemPartner?:string,leftover?:{loc:string;grams:number})=>Promise<void>|void;splitLogs:SplitLog[];setSplitLogs:React.Dispatch<React.SetStateAction<SplitLog[]>>;factories:{code:string;name:string}[];flavors:FlavorWithRecipe[];findFlavor:(id:string)=>FlavorWithRecipe;storageByFactory:Record<string,string[]>;oemList:string[];calcExpiry:(manufacturedAt:string,flavorId:string)=>string;}){
-  const { mutate } = useSWRConfig();
   const [factory,setFactory]=useState(factories[0]?.code ?? ""); const [extraOpen,setExtraOpen]=useState(false);
 
   useEffect(()=>{ if(!factories.length){ setFactory(""); return;} if(!factory || !factories.some(f=>f.code===factory)){ setFactory(factories[0].code);} },[factories,factory]);
 
-  const ordersQuery = useOrders(USE_REMOTE ? (factory || undefined) : undefined);
-  const storageAggQuery = useStorageAgg(USE_REMOTE ? (factory || undefined) : undefined);
+  const ordersQuery = useOrders(factory || undefined);
+  const storageAggQuery = useStorageAgg(factory || undefined);
 
-  const remoteOrders = USE_REMOTE ? ordersQuery?.data : undefined;
+  const remoteOrders = ordersQuery?.data;
   useEffect(()=>{
-    if(!USE_REMOTE || !remoteOrders) return;
+    if(!remoteOrders) return;
     const cardMap=new Map<string,OrderCard>();
     remoteOrders.forEach((row:OrderRow)=>{
       const line:OrderLine=row.use_type==='fissule'
@@ -276,7 +268,7 @@ function Floor({orders,setOrders,storage,setStorage,registerOnsiteMake,splitLogs
     setOrders(Array.from(cardMap.values()));
   },[remoteOrders,setOrders]);
 
-  const remoteStorageAgg = USE_REMOTE ? storageAggQuery?.data : undefined;
+  const remoteStorageAgg = storageAggQuery?.data;
 
   const openOrders=useMemo(()=>orders.filter(o=>!o.archived&&o.factoryCode===factory),[orders,factory]);
   const storageAgg=useMemo(()=>{
@@ -288,7 +280,7 @@ function Floor({orders,setOrders,storage,setStorage,registerOnsiteMake,splitLogs
       locations.forEach(loc=>{ if(loc) entry.locations.add(loc); });
       map.set(lotId,entry);
     };
-    if(USE_REMOTE && remoteStorageAgg){
+    if(remoteStorageAgg){
       remoteStorageAgg.forEach((row:StorageAggRow)=>{
         apply(row.lot_id,row.flavor_id,row.grams,row.manufactured_at,row.locations ?? []);
       });
@@ -301,31 +293,53 @@ function Floor({orders,setOrders,storage,setStorage,registerOnsiteMake,splitLogs
 
   const producedPacksByLot=useCallback((lotId:string)=> splitLogs.filter(l=>l.lotId===lotId).reduce((a,b)=>a+b.packs,0),[splitLogs]);
 
-  const addSplit=useCallback(async(order:OrderCard,packs:number,manufacturedAt:string)=>{
+  const reportMade=useCallback(async(order:OrderCard,report:{packs:number;grams:number;manufacturedAt:string;result:'extra'|'used';leftover?:{location:string;grams:number}|null;})=>{
     const ln=order.lines[0];
-    const subNo=splitLogs.filter(l=>l.lotId===order.lotId).length+1;
-    const gramsMade=packs*(findFlavor(ln.flavorId)?.packToGram ?? 0);
-    setSplitLogs(p=>[...p,{lotId:order.lotId,subNo,flavorId:ln.flavorId,packs,grams:gramsMade,manufacturedAt}]);
-    const total=producedPacksByLot(order.lotId)+packs;
-    if(ln.packs>0 && total>=ln.packs){ setOrders(os=> os.map(o=> o.orderId===order.orderId?{...o,archived:true}:o)); }
-    if(USE_REMOTE){
-      try {
-        await apiPost("action", { type:'MADE_SPLIT', factory_code:order.factoryCode, lot_id:order.lotId, flavor_id:ln.flavorId, payload:{ packs, grams:gramsMade, manufactured_at:manufacturedAt, sub_no:subNo } });
-        await Promise.all([
-          mutate(ordersKey(order.factoryCode)),
-          mutate(storageAggKey(order.factoryCode)),
-        ]);
-      } catch (err) {
-        console.error(err);
-      }
+    const packs=Math.max(0,report.packs);
+    const grams=report.grams;
+    const manufacturedAt=report.manufacturedAt;
+    const result=report.result;
+    const leftover=report.leftover ?? null;
+
+    let subNo: number | undefined;
+    if(ln.useType==='fissule' && packs>0){
+      const newSubNo=splitLogs.filter(l=>l.lotId===order.lotId).length+1;
+      subNo=newSubNo;
+      setSplitLogs(p=>[...p,{lotId:order.lotId,subNo:newSubNo,flavorId:ln.flavorId,packs,grams,manufacturedAt}]);
+      const total=producedPacksByLot(order.lotId)+packs;
+      if(ln.packs>0 && total>=ln.packs){ setOrders(os=> os.map(o=> o.orderId===order.orderId?{...o,archived:true}:o)); }
     }
-  },[findFlavor,mutate,producedPacksByLot,setOrders,setSplitLogs,splitLogs]);
+
+    try {
+      await apiPost("action", {
+        type:'MADE_SPLIT',
+        factory_code:order.factoryCode,
+        lot_id:order.lotId,
+        flavor_id:ln.flavorId,
+        payload:{
+          packs,
+          grams,
+          manufactured_at:manufacturedAt,
+          result,
+          leftover: leftover ? { location:leftover.location, grams:leftover.grams } : null,
+          ...(subNo ? { sub_no: subNo } : {}),
+        },
+      });
+      await Promise.all([
+        refreshOrders(order.factoryCode),
+        refreshStorage(order.factoryCode),
+      ]);
+    } catch (err) {
+      console.error(err);
+      alert("通信に失敗しました");
+    }
+  },[producedPacksByLot,setOrders,setSplitLogs,splitLogs]);
 
   return (<div className="grid md:grid-cols-2 gap-6 items-start">
     <div className="flex items-center gap-3"><Label>製造場所</Label><Select value={factory} onValueChange={setFactory}><SelectTrigger className="w-56"><SelectValue/></SelectTrigger><SelectContent>{factories.map(f=> <SelectItem key={f.code} value={f.code}>{f.name}（{f.code}）</SelectItem>)}</SelectContent></Select></div>
     <div className="md:col-span-2 grid md:grid-cols-2 gap-6">
       <KanbanColumn title="製造指示" icon={<ChefHat className="h-4 w-4"/>} rightSlot={<Button variant="outline" onClick={()=>setExtraOpen(true)} className="gap-1"><Plus className="h-4 w-4"/>追加で作成</Button>}>
-        {openOrders.map(o=> <OrderCardView key={o.orderId} order={o} onArchive={()=>setOrders(prev=>prev.map(od=>od.orderId===o.orderId?{...od,archived:true}:od))} onAddStorage={entries=>setStorage(prev=>[...prev,...entries])} remainingPacks={Math.max(0,(o.lines[0].packs||0)-producedPacksByLot(o.lotId))} splitLogs={splitLogs.filter(s=>s.lotId===o.lotId)} onAddSplit={addSplit} findFlavor={findFlavor} storageByFactory={storageByFactory}/> ) }
+        {openOrders.map(o=> <OrderCardView key={o.orderId} order={o} onArchive={()=>setOrders(prev=>prev.map(od=>od.orderId===o.orderId?{...od,archived:true}:od))} onAddStorage={entries=>setStorage(prev=>[...prev,...entries])} remainingPacks={Math.max(0,(o.lines[0].packs||0)-producedPacksByLot(o.lotId))} splitLogs={splitLogs.filter(s=>s.lotId===o.lotId)} onReportMade={reportMade} findFlavor={findFlavor} storageByFactory={storageByFactory}/> ) }
         {openOrders.length===0 && <Empty>ここにカードが表示されます</Empty>}
       </KanbanColumn>
       <KanbanColumn title="保管（在庫）" icon={<Warehouse className="h-4 w-4"/>}>
@@ -342,7 +356,7 @@ function KanbanColumn({title,icon,rightSlot,children}:{title:string;icon?:React.
 }
 const Empty=({children}:{children:React.ReactNode})=> (<div className="text-sm text-muted-foreground border rounded-xl p-6 text-center">{children}</div>);
 
-function OrderCardView({order,onArchive,onAddStorage,remainingPacks,splitLogs,onAddSplit,findFlavor,storageByFactory}:{order:OrderCard;onArchive:()=>void;onAddStorage:(e:StorageEntry[])=>void;remainingPacks:number;splitLogs:SplitLog[];onAddSplit:(order:OrderCard,packs:number,manufacturedAt:string)=>void;findFlavor:(id:string)=>FlavorWithRecipe;storageByFactory:Record<string,string[]>;}){
+function OrderCardView({order,onArchive,onAddStorage,remainingPacks,splitLogs,onReportMade,findFlavor,storageByFactory}:{order:OrderCard;onArchive:()=>void;onAddStorage:(e:StorageEntry[])=>void;remainingPacks:number;splitLogs:SplitLog[];onReportMade:(order:OrderCard,report:{packs:number;grams:number;manufacturedAt:string;result:'extra'|'used';leftover?:{location:string;grams:number}|null;})=>void;findFlavor:(id:string)=>FlavorWithRecipe;storageByFactory:Record<string,string[]>;}){
   const [open,setOpen]=useState<null|"keep"|"made"|"skip"|"choice"|"split">(null); const ln=order.lines[0]; const flavor=findFlavor(ln.flavorId); const reset=()=>setOpen(null);
   const canSplit = ln.useType==='fissule' && ln.packs>0;
   return (<Card className="border rounded-xl"><CardContent className="pt-4 space-y-3">
@@ -355,9 +369,9 @@ function OrderCardView({order,onArchive,onAddStorage,remainingPacks,splitLogs,on
     <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={()=>setOpen("keep")}>保管</Button><Button onClick={()=> setOpen("choice")}>作った</Button><Button variant="secondary" onClick={()=>setOpen("skip")}>作らない</Button></div>
   </CardContent>
   <KeepDialog open={open==="keep"} onClose={reset} factoryCode={order.factoryCode} flavorId={ln.flavorId} lotId={order.lotId} storageByFactory={storageByFactory} onSubmit={async (loc,g,mfg)=>{onAddStorage([{lotId:order.lotId,factoryCode:order.factoryCode,location:loc,grams:g,flavorId:ln.flavorId,manufacturedAt:mfg}]);onArchive();}}/>
-  <MadeDialog2 open={open==="made"} mode="bulk" onClose={reset} order={order} remaining={remainingPacks} onAddStorage={onAddStorage} onAddSplit={(packs,date)=>{onAddSplit(order,packs,date);}} findFlavor={findFlavor} storageByFactory={storageByFactory}/>
+  <MadeDialog2 open={open==="made"} mode="bulk" onClose={reset} order={order} remaining={remainingPacks} onAddStorage={onAddStorage} onReport={(report)=>{onReportMade(order,report);}} findFlavor={findFlavor} storageByFactory={storageByFactory}/>
   <MadeChoiceDialog open={open==="choice"} onClose={reset} canSplit={canSplit} onBulk={()=>setOpen("made")} onSplit={()=>setOpen("split")}/>
-  <MadeDialog2 open={open==="split"} mode="split" onClose={reset} order={order} remaining={remainingPacks} onAddStorage={onAddStorage} onAddSplit={(packs,date)=>{onAddSplit(order,packs,date);}} findFlavor={findFlavor} storageByFactory={storageByFactory}/>
+  <MadeDialog2 open={open==="split"} mode="split" onClose={reset} order={order} remaining={remainingPacks} onAddStorage={onAddStorage} onReport={(report)=>{onReportMade(order,report);}} findFlavor={findFlavor} storageByFactory={storageByFactory}/>
   <Dialog open={open==="skip"} onOpenChange={(o)=>{if(!o)reset();}}><DialogContent><DialogHeader><DialogTitle>作らない理由（任意）</DialogTitle></DialogHeader></DialogContent></Dialog>
   </Card>);
 }
@@ -370,19 +384,20 @@ function MadeChoiceDialog({open,onClose,canSplit,onBulk,onSplit}:{open:boolean;o
 }
 
 function KeepDialog({open,onClose,factoryCode,flavorId,lotId,storageByFactory,onSubmit}:{open:boolean;onClose:()=>void;factoryCode:string;flavorId:string;lotId:string;storageByFactory:Record<string,string[]>;onSubmit:(location:string,grams:number,manufacturedAt:string)=>Promise<void>|void;}){
-  const { mutate } = useSWRConfig();
   const [loc,setLoc]=useState(""); const [g,setG]=useState(0); const [mfg,setMfg]=useState(format(new Date(),"yyyy-MM-dd")); const locs=storageByFactory[factoryCode]||[];
   useEffect(()=>{ if(open){ setLoc(""); setG(0); setMfg(format(new Date(),"yyyy-MM-dd")); } },[open]);
   const handleSubmit=async()=>{
     if(!loc||g<=0||!mfg) return;
     await onSubmit(loc,g,mfg);
-    if(USE_REMOTE){
-      try {
-        await apiPost("action", { type:'KEEP', factory_code:factoryCode, lot_id:lotId, flavor_id:flavorId, payload:{ location:loc, grams:g, manufactured_at:mfg } });
-        await mutate(storageAggKey(factoryCode));
-      } catch (err) {
-        console.error(err);
-      }
+    try {
+      await apiPost("action", { type:'KEEP', factory_code:factoryCode, lot_id:lotId, flavor_id:flavorId, payload:{ location:loc, grams:g, manufactured_at:mfg } });
+      await Promise.all([
+        refreshStorage(factoryCode),
+        refreshOrders(factoryCode),
+      ]);
+    } catch (err) {
+      console.error(err);
+      alert("通信に失敗しました");
     }
     onClose();
   };
@@ -396,7 +411,7 @@ function KeepDialog({open,onClose,factoryCode,flavorId,lotId,storageByFactory,on
   </DialogContent></Dialog>);
 }
 
-function MadeDialog2({open,onClose,order,mode,remaining,onAddStorage,onAddSplit,findFlavor,storageByFactory}:{open:boolean;onClose:()=>void;order:OrderCard;mode:'bulk'|'split';remaining:number;onAddStorage:(e:StorageEntry[])=>void;onAddSplit:(packs:number,date:string)=>void;findFlavor:(id:string)=>FlavorWithRecipe;storageByFactory:Record<string,string[]>;}){
+function MadeDialog2({open,onClose,order,mode,remaining,onAddStorage,onReport,findFlavor,storageByFactory}:{open:boolean;onClose:()=>void;order:OrderCard;mode:'bulk'|'split';remaining:number;onAddStorage:(e:StorageEntry[])=>void;onReport:(report:{packs:number;grams:number;manufacturedAt:string;result:'extra'|'used';leftover?:{location:string;grams:number}|null;})=>void;findFlavor:(id:string)=>FlavorWithRecipe;storageByFactory:Record<string,string[]>;}){
   const [checked,setChecked]=useState<Record<string,boolean>>({});
   const [recipeQty,setRecipeQty]=useState<Record<string,number>>({});
   const [mfg,setMfg]=useState(format(new Date(),"yyyy-MM-dd"));
@@ -424,16 +439,26 @@ function MadeDialog2({open,onClose,order,mode,remaining,onAddStorage,onAddSplit,
   const allChecked=flavor.recipe.every(r=>checked[r.ingredient]);
   const tooMuch = showPackInput && packsMade>Math.max(0,remaining);
   const submit=()=>{
-    if(showPackInput){
-      if(packsMade<=0||tooMuch) return;
-      onAddSplit(packsMade,mfg);
-    } else {
-      // OEM: treat as already consumed/used; no split log
-    }
-    if(outcome==='extra'){
-      if(leftG>0&&leftLoc){
-        onAddStorage([{lotId:order.lotId,factoryCode:order.factoryCode,location:leftLoc,grams:leftG,flavorId:flavor.id,manufacturedAt:mfg}]);
-      }
+    if(showPackInput && (packsMade<=0||tooMuch)) return;
+    if(outcome!== 'extra' && outcome!== 'used') return;
+    const packsValue=showPackInput? packsMade:0;
+    const gramsValue=showPackInput
+      ? packsMade*(flavor.packToGram ?? 0)
+      : (order.lines[0]?.requiredGrams ?? 0);
+    const leftoverPayload = outcome==='extra' && leftG>0 && leftLoc
+      ? { location:leftLoc, grams:leftG }
+      : null;
+
+    onReport({
+      packs:packsValue,
+      grams:gramsValue,
+      manufacturedAt:mfg,
+      result:outcome,
+      leftover:leftoverPayload,
+    });
+
+    if(leftoverPayload){
+      onAddStorage([{lotId:order.lotId,factoryCode:order.factoryCode,location:leftoverPayload.location,grams:leftoverPayload.grams,flavorId:flavor.id,manufacturedAt:mfg}]);
     }
     onClose();
   };
@@ -500,7 +525,6 @@ function OnsiteMakeDialog({open,onClose,defaultFlavorId,factoryCode,onRegister,f
 }
 
 function StorageCardView({agg,onUse,onWaste,findFlavor,calcExpiry,factoryCode}:{agg:{lotId:string;grams:number;locations:Set<string>;flavorId:string;manufacturedAt:string};onUse:(usedQty:number,leftover:number,location:string)=>Promise<void>|void;onWaste:(qtyOrText:number|string,reason:'expiry'|'mistake'|'other',location:string)=>Promise<void>|void;findFlavor:(id:string)=>FlavorWithRecipe;calcExpiry:(manufacturedAt:string,flavorId:string)=>string;factoryCode:string;}){
-  const { mutate } = useSWRConfig();
   const [useOpen,setUseOpen]=useState(false); const [wasteOpen,setWasteOpen]=useState(false);
   const [useQty,setUseQty]=useState(0); const [useOutcome,setUseOutcome]=useState<'extra'|'none'|'shortage'|''>(''); const [leftQty,setLeftQty]=useState(0); const [loc,setLoc]=useState<string>(Array.from(agg.locations)[0]||"");
   const [wasteReason,setWasteReason]=useState<'expiry'|'mistake'|'other'|''>(''); const [wasteQty,setWasteQty]=useState(0); const [wasteText,setWasteText]=useState("");
@@ -511,13 +535,12 @@ function StorageCardView({agg,onUse,onWaste,findFlavor,calcExpiry,factoryCode}:{
   const handleUse=async()=>{
     const location = effectiveLocation(loc);
     await onUse(useQty,useOutcome==='extra'?leftQty:0,location);
-    if(USE_REMOTE){
-      try {
-        await apiPost("action", { type:'USE', factory_code:factoryCode, lot_id:agg.lotId, flavor_id:agg.flavorId, payload:{ qty:useQty, location } });
-        await mutate(storageAggKey(factoryCode));
-      } catch (err) {
-        console.error(err);
-      }
+    try {
+      await apiPost("action", { type:'USE', factory_code:factoryCode, lot_id:agg.lotId, flavor_id:agg.flavorId, payload:{ qty:useQty, location } });
+      await refreshStorage(factoryCode);
+    } catch (err) {
+      console.error(err);
+      alert("通信に失敗しました");
     }
     setUseOpen(false);
   };
@@ -525,23 +548,21 @@ function StorageCardView({agg,onUse,onWaste,findFlavor,calcExpiry,factoryCode}:{
     const location = effectiveLocation(loc);
     if(wasteReason==='other'){
       await onWaste(wasteText,'other',location);
-      if(USE_REMOTE){
-        try {
-          await apiPost("action", { type:'WASTE', factory_code:factoryCode, lot_id:agg.lotId, flavor_id:agg.flavorId, payload:{ reason:'other', note:wasteText, location } });
-          await mutate(storageAggKey(factoryCode));
-        } catch (err) {
-          console.error(err);
-        }
+      try {
+        await apiPost("action", { type:'WASTE', factory_code:factoryCode, lot_id:agg.lotId, flavor_id:agg.flavorId, payload:{ reason:'other', note:wasteText, location } });
+        await refreshStorage(factoryCode);
+      } catch (err) {
+        console.error(err);
+        alert("通信に失敗しました");
       }
     } else if(wasteReason){
       await onWaste(wasteQty,wasteReason,location);
-      if(USE_REMOTE){
-        try {
-          await apiPost("action", { type:'WASTE', factory_code:factoryCode, lot_id:agg.lotId, flavor_id:agg.flavorId, payload:{ reason:wasteReason, qty:wasteQty, location } });
-          await mutate(storageAggKey(factoryCode));
-        } catch (err) {
-          console.error(err);
-        }
+      try {
+        await apiPost("action", { type:'WASTE', factory_code:factoryCode, lot_id:agg.lotId, flavor_id:agg.flavorId, payload:{ reason:wasteReason, qty:wasteQty, location } });
+        await refreshStorage(factoryCode);
+      } catch (err) {
+        console.error(err);
+        alert("通信に失敗しました");
       }
     }
     setWasteOpen(false);
