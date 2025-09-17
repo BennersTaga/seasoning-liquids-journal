@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect, useCallback } from "react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,65 +12,167 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Package, Warehouse, Archive, Beaker, Factory, Trash2, Boxes, ChefHat } from "lucide-react";
 import { format } from "date-fns";
+import { useMasters, useOrders, useStorageAgg, postAction } from '@/lib/sheets/hooks';
+import type { Masters, OrderRow, StorageAggRow } from '@/lib/sheets/types';
 
-// ==== masters & utils (short) ====
-const factories = [{ code: "GT", name: "玄天" }, { code: "HN", name: "羽野" }];
-const storageByFactory: Record<string, string[]> = { GT: ["冷蔵庫"], HN: ["捌き手冷蔵庫", "氷感庫", "縦型冷蔵庫", "SCMパレット(華子パレット)"] };
-const flavors = [
-  { id: "tomato_umami", flavorName: "旨味トマト", liquidName: "旨味トマト調味液", packToGram: 850, expiryDays: 21, recipe: [
-    { ingredient: "砂糖", qty: 1200, unit: "g" }, { ingredient: "食塩", qty: 400, unit: "g" }, { ingredient: "トマトペースト", qty: 2000, unit: "g" },
-  ]},
-  { id: "herb_marinade", flavorName: "ハーブマリネオイル", liquidName: "ハーブマリネオイル調味液", packToGram: 900, expiryDays: 21, recipe: [
-    { ingredient: "オリーブオイル", qty: 3000, unit: "g" }, { ingredient: "ハーブMIX", qty: 120, unit: "g" }, { ingredient: "にんにく", qty: 60, unit: "g" },
-  ]},
-];
-const oemList = ["F社ブランド", "G社ブランド", "H社ブランド"];
-const findFlavor = (id: string) => flavors.find(f => f.id === id)!;
-const grams = (n: number) => `${n.toLocaleString()} g`;
-const genLotId = (factoryCode: string, seq: number, d = new Date()) => `${factoryCode}-${format(d, "yyyyMMdd")}-${String(seq).padStart(3, "0")}`;
-const genOnsiteLotId = (factoryCode: string, seq2: number, d = new Date()) => `${factoryCode}-${format(d, "yyyyMMdd")}-9${String(seq2 % 100).padStart(2, "0")}`;
-const calcExpiry = (manufacturedAt: string, flavorId: string) => { const days = findFlavor(flavorId)?.expiryDays ?? 21; const d = new Date(manufacturedAt); d.setDate(d.getDate() + days); return format(d, "yyyy-MM-dd"); };
-const Field = ({ label, children }: { label: string; children: React.ReactNode }) => (
-  <div className="space-y-1 min-w-[120px]"><div className="inline-flex items-center rounded-md bg-slate-800 text-white px-2 py-0.5 text-[11px] tracking-wide">{label}</div><div className="text-sm font-medium leading-tight">{children}</div></div>
-);
+const USE_REMOTE = process.env.NEXT_PUBLIC_USE_SHEETS === '1';
 
-// ==== types ====
+type FlavorRecipeItem = { ingredient: string; qty: number; unit: string };
+interface FlavorWithRecipe {
+  id: string;
+  flavorName: string;
+  liquidName: string;
+  packToGram: number;
+  expiryDays: number;
+  recipe: FlavorRecipeItem[];
+}
+
 interface OrderLine { flavorId: string; packs: number; requiredGrams: number; useType: 'fissule'|'oem'; oemPartner?: string; oemGrams?: number; }
 interface OrderCard { orderId: string; lotId: string; factoryCode: string; orderedAt: string; lines: OrderLine[]; archived?: boolean; }
 interface StorageEntry { lotId: string; factoryCode: string; location: string; grams: number; flavorId: string; manufacturedAt: string; }
 interface SplitLog { lotId: string; subNo: number; flavorId: string; packs: number; grams: number; manufacturedAt: string; }
 
-// ==== app ====
+const fallbackFactories = [{ code: "GT", name: "玄天" }, { code: "HN", name: "羽野" }];
+const fallbackStorageByFactory: Record<string, string[]> = { GT: ["冷蔵庫"], HN: ["捌き手冷蔵庫", "氷感庫", "縦型冷蔵庫", "SCMパレット(華子パレット)"] };
+const fallbackFlavors: FlavorWithRecipe[] = [
+  { id: "tomato_umami", flavorName: "旨味トマト", liquidName: "旨味トマト調味液", packToGram: 850, expiryDays: 21, recipe: [
+    { ingredient: "砂糖", qty: 1200, unit: "g" }, { ingredient: "食塩", qty: 400, unit: "g" }, { ingredient: "トマトペースト", qty: 2000, unit: "g" },
+  ]},
+  { id: "herb_marinade", flavorName: "ハーブマリネオイル", liquidName: "ハーブマリネオイル調味液", packToGram: 900, expiryDays:21, recipe: [
+    { ingredient: "オリーブオイル", qty: 3000, unit: "g" }, { ingredient: "ハーブMIX", qty: 120, unit: "g" }, { ingredient: "にんにく", qty: 60, unit: "g" },
+  ]},
+];
+const fallbackOemList = ["F社ブランド", "G社ブランド", "H社ブランド"];
+
+const fallbackFindFlavor = (id: string) => fallbackFlavors.find(f => f.id === id) ?? fallbackFlavors[0];
+
+const grams = (n: number) => `${n.toLocaleString()} g`;
+const genLotId = (factoryCode: string, seq: number, d = new Date()) => `${factoryCode}-${format(d, "yyyyMMdd")}-${String(seq).padStart(3, "0")}`;
+const genOnsiteLotId = (factoryCode: string, seq2: number, d = new Date()) => `${factoryCode}-${format(d, "yyyyMMdd")}-9${String(seq2 % 100).padStart(2, "0")}`;
+
+const Field = ({ label, children }: { label: string; children: React.ReactNode }) => (
+  <div className="space-y-1 min-w-[120px]"><div className="inline-flex items-center rounded-md bg-slate-800 text-white px-2 py-0.5 text-[11px] tracking-wide">{label}</div><div className="text-sm font-medium leading-tight">{children}</div></div>
+);
+
+const fallbackInitialOrders: OrderCard[] = [
+  {orderId:"O-001",lotId:genLotId("GT",1),factoryCode:"GT",orderedAt:format(new Date(),"yyyy-MM-dd"),lines:[{flavorId:"tomato_umami",packs:160,requiredGrams:160*(fallbackFindFlavor("tomato_umami")?.packToGram ?? 0),useType:'fissule'}]},
+  {orderId:"O-002",lotId:genLotId("GT",2),factoryCode:"GT",orderedAt:format(new Date(),"yyyy-MM-dd"),lines:[{flavorId:"herb_marinade",packs:80,requiredGrams:80*(fallbackFindFlavor("herb_marinade")?.packToGram ?? 0),useType:'fissule'}]},
+  {orderId:"O-003",lotId:genLotId("HN",3),factoryCode:"HN",orderedAt:format(new Date(),"yyyy-MM-dd"),lines:[{flavorId:"tomato_umami",packs:0,requiredGrams:50000,useType:'oem',oemPartner:"F社ブランド",oemGrams:50000}]},
+];
+
+function deriveDataFromMasters(masters?: Masters) {
+  const remoteFactories = masters?.factories?.map(f => ({ code: f.code, name: f.name })) ?? [];
+  const factories = remoteFactories.length ? remoteFactories : [...fallbackFactories];
+
+  const locationMap = masters?.locations?.reduce<Record<string, string[]>>((acc, loc) => {
+    (acc[loc.factory_code] ??= []).push(loc.location_name);
+    return acc;
+  }, {}) ?? {};
+  const storageByFactory: Record<string, string[]> = {};
+  factories.forEach(f => {
+    const remote = locationMap[f.code] ?? [];
+    const fallback = fallbackStorageByFactory[f.code] ?? [];
+    storageByFactory[f.code] = remote.length ? remote : [...fallback];
+  });
+
+  const recipeMap = masters?.recipes?.reduce<Map<string, FlavorRecipeItem[]>>((map, row) => {
+    const arr = map.get(row.flavor_id) ?? [];
+    arr.push({ ingredient: row.ingredient_name, qty: row.qty, unit: row.unit });
+    map.set(row.flavor_id, arr);
+    return map;
+  }, new Map()) ?? new Map();
+  const remoteFlavors = masters?.flavors?.map(fl => ({
+    id: fl.id,
+    flavorName: fl.flavorName,
+    liquidName: fl.liquidName,
+    packToGram: fl.packToGram,
+    expiryDays: fl.expiryDays,
+    recipe: recipeMap.get(fl.id) ?? [],
+  })) ?? [];
+  const flavors = remoteFlavors.length ? remoteFlavors : [...fallbackFlavors];
+
+  const oemList = masters?.oems?.length ? masters.oems : [...fallbackOemList];
+
+  return { factories, storageByFactory, flavors, oemList };
+}
+
 export default function App(){
   const [tab,setTab]=useState("office");
-  const [orders,setOrders]=useState<OrderCard[]>([
-    {orderId:"O-001",lotId:genLotId("GT",1),factoryCode:"GT",orderedAt:format(new Date(),"yyyy-MM-dd"),lines:[{flavorId:"tomato_umami",packs:160,requiredGrams:160*findFlavor("tomato_umami").packToGram,useType:'fissule'}]},
-    {orderId:"O-002",lotId:genLotId("GT",2),factoryCode:"GT",orderedAt:format(new Date(),"yyyy-MM-dd"),lines:[{flavorId:"herb_marinade",packs:80,requiredGrams:80*findFlavor("herb_marinade").packToGram,useType:'fissule'}]},
-    {orderId:"O-003",lotId:genLotId("HN",3),factoryCode:"HN",orderedAt:format(new Date(),"yyyy-MM-dd"),lines:[{flavorId:"tomato_umami",packs:0,requiredGrams:50000,useType:'oem',oemPartner:"F社ブランド",oemGrams:50000}]},
-  ]);
-  const [seq,setSeq]=useState(4); const [onsiteSeq,setOnsiteSeq]=useState(1); const [storage,setStorage]=useState<StorageEntry[]>([]);
+  const mastersQuery = useMasters(USE_REMOTE);
+  const mastersData = mastersQuery?.data;
+  const { factories, storageByFactory, flavors, oemList } = useMemo(() => deriveDataFromMasters(mastersData), [mastersData]);
+
+  const findFlavor = useCallback((id: string) => {
+    const list = flavors.length ? flavors : fallbackFlavors;
+    return list.find(f => f.id === id) ?? list[0] ?? fallbackFlavors[0];
+  }, [flavors]);
+
+  const calcExpiry = useCallback((manufacturedAt: string, flavorId: string) => {
+    const flavor = findFlavor(flavorId);
+    const days = flavor?.expiryDays ?? 21;
+    const d = new Date(manufacturedAt);
+    d.setDate(d.getDate() + days);
+    return format(d, "yyyy-MM-dd");
+  }, [findFlavor]);
+
+  const [orders,setOrders]=useState<OrderCard[]>(() => fallbackInitialOrders);
+  const [seq,setSeq]=useState(4);
+  const [onsiteSeq,setOnsiteSeq]=useState(1);
+  const [storage,setStorage]=useState<StorageEntry[]>([]);
   const [splitLogs,setSplitLogs]=useState<SplitLog[]>([]);
-  useEffect(()=>{console.assert(factories.length&&flavors.length);},[]);
-  const registerOnsiteMake=(factoryCode:string,flavorId:string,useType:'fissule'|'oem',producedG:number,manufacturedAt:string,oemPartner?:string,leftover?:{loc:string;grams:number})=>{const lot=genOnsiteLotId(factoryCode,onsiteSeq,new Date(manufacturedAt));const newOrder:OrderCard={orderId:`OS-${String(onsiteSeq).padStart(3,'0')}`,lotId:lot,factoryCode,orderedAt:manufacturedAt,archived:true,lines:[useType==='fissule'?{flavorId,packs:0,requiredGrams:producedG,useType}:{flavorId,packs:0,requiredGrams:producedG,useType,oemPartner,oemGrams:producedG}]};setOrders(p=>[newOrder,...p]);if(leftover&&leftover.grams>0){setStorage(p=>[...p,{lotId:lot,factoryCode,flavorId,location:leftover.loc,grams:leftover.grams,manufacturedAt}]);}setOnsiteSeq(s=>s+1)};
+
+  const registerOnsiteMake=useCallback((factoryCode:string,flavorId:string,useType:'fissule'|'oem',producedG:number,manufacturedAt:string,oemPartner?:string,leftover?:{loc:string;grams:number})=>{
+    const lot=genOnsiteLotId(factoryCode,onsiteSeq,new Date(manufacturedAt));
+    const newOrder:OrderCard={orderId:`OS-${String(onsiteSeq).padStart(3,'0')}`,lotId:lot,factoryCode,orderedAt:manufacturedAt,archived:true,lines:[useType==='fissule'?{flavorId,packs:0,requiredGrams:producedG,useType}:{flavorId,packs:0,requiredGrams:producedG,useType,oemPartner,oemGrams:producedG}]};
+    setOrders(prev=>[newOrder,...prev]);
+    if(leftover&&leftover.grams>0){
+      setStorage(prev=>[...prev,{lotId:lot,factoryCode,flavorId,location:leftover.loc,grams:leftover.grams,manufacturedAt}]);
+    }
+    setOnsiteSeq(s=>s+1);
+  },[onsiteSeq]);
+
   return (<div className="min-h-screen bg-orange-50 p-6 mx-auto max-w-7xl space-y-6"><header className="flex items-center justify-between"><h1 className="text-2xl font-semibold">調味液日報 UI プロトタイプ</h1><div className="text-sm opacity-80">タブで「オフィス / 現場」を切替</div></header>
     <Tabs value={tab} onValueChange={setTab}><TabsList className="grid grid-cols-2 w-full md:w-96"><TabsTrigger value="office" className="flex gap-2"><Factory className="h-4 w-4"/>オフィス（5F/管理）</TabsTrigger><TabsTrigger value="floor" className="flex gap-2"><Boxes className="h-4 w-4"/>現場（フロア）</TabsTrigger></TabsList>
-      <TabsContent value="office" className="mt-6"><Office orders={orders} setOrders={setOrders} seq={seq} setSeq={setSeq}/></TabsContent>
-      <TabsContent value="floor" className="mt-6"><Floor orders={orders} setOrders={setOrders} storage={storage} setStorage={setStorage} registerOnsiteMake={registerOnsiteMake} splitLogs={splitLogs} setSplitLogs={setSplitLogs}/></TabsContent>
+      <TabsContent value="office" className="mt-6"><Office orders={orders} setOrders={setOrders} seq={seq} setSeq={setSeq} factories={factories} flavors={flavors} oemList={oemList} findFlavor={findFlavor}/></TabsContent>
+      <TabsContent value="floor" className="mt-6"><Floor orders={orders} setOrders={setOrders} storage={storage} setStorage={setStorage} registerOnsiteMake={registerOnsiteMake} splitLogs={splitLogs} setSplitLogs={setSplitLogs} factories={factories} flavors={flavors} findFlavor={findFlavor} storageByFactory={storageByFactory} oemList={oemList} calcExpiry={calcExpiry}/></TabsContent>
     </Tabs>
     <footer className="text-xs text-center text-muted-foreground opacity-70">MVPプロトタイプ・ローカル状態のみ</footer></div>);
 }
 
-function Office({orders,setOrders,seq,setSeq}:{orders:OrderCard[];setOrders:(x:OrderCard[])=>void;seq:number;setSeq:(n:number)=>void;}){
-  const [factory,setFactory]=useState(factories[0].code); const [flavor,setFlavor]=useState(flavors[0].id); const [useType,setUseType]=useState<'fissule'|'oem'>('fissule'); const [packs,setPacks]=useState(100); const [oemPartner,setOemPartner]=useState(oemList[0]); const [oemGrams,setOemGrams]=useState(0);
-  const buildLine=(flavorId:string,useType:'fissule'|'oem',packs:number,oemPartner?:string,oemG?:number):OrderLine=> useType==='fissule'?{flavorId,packs,requiredGrams:packs*findFlavor(flavorId).packToGram,useType}:{flavorId,packs:0,requiredGrams:Math.max(0,oemG||0),useType,oemPartner,oemGrams:Math.max(0,oemG||0)};
-  const createOrder=()=>{const today=new Date();const lot=genLotId(factory,seq,today);const line=buildLine(flavor,useType,packs,oemPartner,oemGrams);if((useType==='fissule'&&packs<=0)||(useType==='oem'&&(!oemPartner||(oemGrams||0)<=0)))return;const newOrder:OrderCard={orderId:`O-${String(seq).padStart(3,"0")}`,lotId:lot,factoryCode:factory,orderedAt:format(today,"yyyy-MM-dd"),lines:[line]};setOrders([newOrder,...orders]);setSeq(seq+1)};
+function Office({orders,setOrders,seq,setSeq,factories,flavors,oemList,findFlavor}:{orders:OrderCard[];setOrders:React.Dispatch<React.SetStateAction<OrderCard[]>>;seq:number;setSeq:React.Dispatch<React.SetStateAction<number>>;factories:{code:string;name:string}[];flavors:FlavorWithRecipe[];oemList:string[];findFlavor:(id:string)=>FlavorWithRecipe;}){
+  const [factory,setFactory]=useState(factories[0]?.code ?? ""); const [flavor,setFlavor]=useState(flavors[0]?.id ?? ""); const [useType,setUseType]=useState<'fissule'|'oem'>('fissule'); const [packs,setPacks]=useState(100); const [oemPartner,setOemPartner]=useState(oemList[0] ?? ""); const [oemGrams,setOemGrams]=useState(0);
+
+  useEffect(()=>{ if(factories.length && !factories.some(f=>f.code===factory)){ setFactory(factories[0].code);} },[factories,factory]);
+  useEffect(()=>{ if(flavors.length && !flavors.some(f=>f.id===flavor)){ setFlavor(flavors[0].id);} },[flavors,flavor]);
+  useEffect(()=>{ if(oemList.length && !oemList.includes(oemPartner)){ setOemPartner(oemList[0]);} },[oemList,oemPartner]);
+
+  const buildLine=useCallback((flavorId:string,useType:'fissule'|'oem',packs:number,oemPartner?:string,oemG?:number):OrderLine=>{
+    if(useType==='fissule'){
+      const flavorInfo=findFlavor(flavorId);
+      return {flavorId,packs,requiredGrams:packs*(flavorInfo?.packToGram ?? 0),useType};
+    }
+    const gramsVal=Math.max(0,oemG||0);
+    return {flavorId,packs:0,requiredGrams:gramsVal,useType,oemPartner,oemGrams:gramsVal};
+  },[findFlavor]);
+
+  const createOrder=()=>{
+    if(!factory||!flavor) return;
+    const today=new Date();
+    const lot=genLotId(factory,seq,today);
+    const line=buildLine(flavor,useType,packs,oemPartner,oemGrams);
+    if((useType==='fissule'&&packs<=0)||(useType==='oem'&&(!oemPartner||(oemGrams||0)<=0)))return;
+    const newOrder:OrderCard={orderId:`O-${String(seq).padStart(3,"0")}`,lotId:lot,factoryCode:factory,orderedAt:format(today,"yyyy-MM-dd"),lines:[line]};
+    setOrders(prev=>[newOrder,...prev]);
+    setSeq(n=>n+1);
+  };
+
   return (<div className="grid md:grid-cols-2 gap-6">
     <Card className="shadow-sm"><CardHeader><CardTitle className="flex items-center gap-2"><Plus className="h-5 w-5"/>製造指示チケットの作成</CardTitle></CardHeader><CardContent className="space-y-4">
       <div><Label>製造場所</Label><Select value={factory} onValueChange={setFactory}><SelectTrigger><SelectValue placeholder="選択"/></SelectTrigger><SelectContent>{factories.map(f=> <SelectItem key={f.code} value={f.code}>{f.name}（{f.code}）</SelectItem>)}</SelectContent></Select></div>
       {useType==='fissule'? (<div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
         <div><Label>味付け</Label><Select value={flavor} onValueChange={setFlavor}><SelectTrigger><SelectValue/></SelectTrigger><SelectContent>{flavors.map(fl=> <SelectItem key={fl.id} value={fl.id}>{fl.flavorName}</SelectItem>)}</SelectContent></Select></div>
         <div><Label>用途</Label><Select value={useType} onValueChange={(value: 'fissule' | 'oem') => setUseType(value)}><SelectTrigger><SelectValue/></SelectTrigger><SelectContent><SelectItem value="fissule">製品（パック）</SelectItem><SelectItem value="oem">OEM</SelectItem></SelectContent></Select></div>
-        <div><Label>パック数</Label><Input type="number" value={packs} onChange={e=>setPacks(parseInt(e.target.value||"0"))}/><div className="text-xs text-muted-foreground mt-1">必要量: {grams(packs*findFlavor(flavor).packToGram)}</div></div>
+        <div><Label>パック数</Label><Input type="number" value={packs} onChange={e=>setPacks(parseInt(e.target.value||"0"))}/><div className="text-xs text-muted-foreground mt-1">必要量: {grams(packs*(findFlavor(flavor)?.packToGram ?? 0))}</div></div>
       </div>) : (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
           <div><Label>味付け</Label><Select value={flavor} onValueChange={setFlavor}><SelectTrigger><SelectValue/></SelectTrigger><SelectContent>{flavors.map(fl=> <SelectItem key={fl.id} value={fl.id}>{fl.flavorName}</SelectItem>)}</SelectContent></Select></div>
@@ -85,7 +187,7 @@ function Office({orders,setOrders,seq,setSeq}:{orders:OrderCard[];setOrders:(x:O
       <CardContent className="space-y-3 max-h-[540px] overflow-auto pr-2">
         {orders.filter(o=>!o.archived).map(order=> (
           <div key={order.orderId} className="border rounded-xl p-3 space-y-2">
-            <div className="flex flex-wrap items-center justify-between gap-2"><div className="font-medium">{order.lotId} <Badge variant="secondary" className="ml-2">{factories.find(f=>f.code===order.factoryCode)?.name}</Badge></div><div className="text-xs opacity-70">指示日 {order.orderedAt}</div></div>
+            <div className="flex flex-wrap items-center justify-between gap-2"><div className="font-medium">{order.lotId} <Badge variant="secondary" className="ml-2">{factories.find(f=>f.code===order.factoryCode)?.name || order.factoryCode}</Badge></div><div className="text-xs opacity-70">指示日 {order.orderedAt}</div></div>
             {order.lines.map((ln,i)=>{const f=findFlavor(ln.flavorId);return (
               <div key={i} className="text-sm grid gap-3">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4"><Field label="味付け">{f.flavorName}</Field><Field label="用途">{ln.useType==='oem'? 'OEM':'製品'}</Field></div>
@@ -99,25 +201,83 @@ function Office({orders,setOrders,seq,setSeq}:{orders:OrderCard[];setOrders:(x:O
   </div>);
 }
 
-function Floor({orders,setOrders,storage,setStorage,registerOnsiteMake,splitLogs,setSplitLogs}:{orders:OrderCard[];setOrders:React.Dispatch<React.SetStateAction<OrderCard[]>>;storage:StorageEntry[];setStorage:React.Dispatch<React.SetStateAction<StorageEntry[]>>;registerOnsiteMake:(factoryCode:string,flavorId:string,useType:'fissule'|'oem',producedG:number,manufacturedAt:string,oemPartner?:string,leftover?:{loc:string;grams:number})=>void;splitLogs:SplitLog[];setSplitLogs:React.Dispatch<React.SetStateAction<SplitLog[]>>;}){
-  const [factory,setFactory]=useState(factories[0].code); const [extraOpen,setExtraOpen]=useState(false);
+function Floor({orders,setOrders,storage,setStorage,registerOnsiteMake,splitLogs,setSplitLogs,factories,flavors,findFlavor,storageByFactory,oemList,calcExpiry}:{orders:OrderCard[];setOrders:React.Dispatch<React.SetStateAction<OrderCard[]>>;storage:StorageEntry[];setStorage:React.Dispatch<React.SetStateAction<StorageEntry[]>>;registerOnsiteMake:(factoryCode:string,flavorId:string,useType:'fissule'|'oem',producedG:number,manufacturedAt:string,oemPartner?:string,leftover?:{loc:string;grams:number})=>void;splitLogs:SplitLog[];setSplitLogs:React.Dispatch<React.SetStateAction<SplitLog[]>>;factories:{code:string;name:string}[];flavors:FlavorWithRecipe[];findFlavor:(id:string)=>FlavorWithRecipe;storageByFactory:Record<string,string[]>;oemList:string[];calcExpiry:(manufacturedAt:string,flavorId:string)=>string;}){
+  const [factory,setFactory]=useState(factories[0]?.code ?? ""); const [extraOpen,setExtraOpen]=useState(false);
+
+  useEffect(()=>{ if(!factories.length){ setFactory(""); return;} if(!factory || !factories.some(f=>f.code===factory)){ setFactory(factories[0].code);} },[factories,factory]);
+
+  const ordersQuery = useOrders(USE_REMOTE ? (factory || undefined) : undefined);
+  const storageAggQuery = useStorageAgg(USE_REMOTE ? (factory || undefined) : undefined);
+
+  const remoteOrders = USE_REMOTE ? ordersQuery?.data : undefined;
+  useEffect(()=>{
+    if(!USE_REMOTE || !remoteOrders) return;
+    const cardMap=new Map<string,OrderCard>();
+    remoteOrders.forEach((row:OrderRow)=>{
+      const line:OrderLine=row.use_type==='fissule'
+        ? {flavorId:row.flavor_id,packs:row.packs,requiredGrams:row.required_grams,useType:'fissule'}
+        : {flavorId:row.flavor_id,packs:0,requiredGrams:row.required_grams,useType:'oem',oemPartner:row.oem_partner ?? undefined,oemGrams:row.required_grams};
+      const existing=cardMap.get(row.order_id);
+      if(existing){
+        existing.lines.push(line);
+        existing.archived=row.archived;
+      } else {
+        cardMap.set(row.order_id,{orderId:row.order_id,lotId:row.lot_id,factoryCode:row.factory_code,orderedAt:row.ordered_at,lines:[line],archived:row.archived});
+      }
+    });
+    setOrders(Array.from(cardMap.values()));
+  },[remoteOrders,setOrders]);
+
+  const remoteStorageAgg = USE_REMOTE ? storageAggQuery?.data : undefined;
+
   const openOrders=useMemo(()=>orders.filter(o=>!o.archived&&o.factoryCode===factory),[orders,factory]);
-  const storageAgg=useMemo(()=>{const map=new Map<string,{lotId:string;grams:number;locations:Set<string>;flavorId:string;manufacturedAt:string}>();for(const s of storage.filter(s=>s.factoryCode===factory)){const k=s.lotId;const e=map.get(k)||{lotId:k,grams:0,locations:new Set<string>(),flavorId:s.flavorId,manufacturedAt:s.manufacturedAt};e.grams+=s.grams;e.locations.add(s.location);if(!e.manufacturedAt)e.manufacturedAt=s.manufacturedAt;map.set(k,e);}return Array.from(map.values());},[storage,factory]);
-  const producedPacksByLot=(lotId:string)=> splitLogs.filter(l=>l.lotId===lotId).reduce((a,b)=>a+b.packs,0);
-  const addSplit=(order:OrderCard,packs:number,manufacturedAt:string)=>{const ln=order.lines[0]; const subNo=splitLogs.filter(l=>l.lotId===order.lotId).length+1; const gramsMade=packs*findFlavor(ln.flavorId).packToGram; setSplitLogs(p=>[...p,{lotId:order.lotId,subNo,flavorId:ln.flavorId,packs,grams:gramsMade,manufacturedAt}]); const total=producedPacksByLot(order.lotId)+packs; if(ln.packs>0 && total>=ln.packs){ setOrders(os=> os.map(o=> o.orderId===order.orderId?{...o,archived:true}:o)); } };
+  const storageAgg=useMemo(()=>{
+    const map=new Map<string,{lotId:string;grams:number;locations:Set<string>;flavorId:string;manufacturedAt:string}>();
+    const apply=(lotId:string,flavorId:string,gramsDelta:number,manufacturedAt:string,locations:string[])=>{
+      const entry=map.get(lotId) ?? {lotId,grams:0,locations:new Set<string>(),flavorId,manufacturedAt};
+      entry.grams+=gramsDelta;
+      if(!entry.manufacturedAt && manufacturedAt){ entry.manufacturedAt=manufacturedAt; }
+      locations.forEach(loc=>{ if(loc) entry.locations.add(loc); });
+      map.set(lotId,entry);
+    };
+    if(USE_REMOTE && remoteStorageAgg){
+      remoteStorageAgg.forEach((row:StorageAggRow)=>{
+        apply(row.lot_id,row.flavor_id,row.grams,row.manufactured_at,row.locations ?? []);
+      });
+    }
+    storage.filter(s=>s.factoryCode===factory).forEach(entry=>{
+      apply(entry.lotId,entry.flavorId,entry.grams,entry.manufacturedAt,entry.location? [entry.location]:[]);
+    });
+    return Array.from(map.values()).filter(item=>Math.abs(item.grams) > 0);
+  },[factory,remoteStorageAgg,storage]);
+
+  const producedPacksByLot=useCallback((lotId:string)=> splitLogs.filter(l=>l.lotId===lotId).reduce((a,b)=>a+b.packs,0),[splitLogs]);
+
+  const addSplit=useCallback((order:OrderCard,packs:number,manufacturedAt:string)=>{
+    const ln=order.lines[0];
+    const subNo=splitLogs.filter(l=>l.lotId===order.lotId).length+1;
+    const gramsMade=packs*(findFlavor(ln.flavorId)?.packToGram ?? 0);
+    setSplitLogs(p=>[...p,{lotId:order.lotId,subNo,flavorId:ln.flavorId,packs,grams:gramsMade,manufacturedAt}]);
+    const total=producedPacksByLot(order.lotId)+packs;
+    if(ln.packs>0 && total>=ln.packs){ setOrders(os=> os.map(o=> o.orderId===order.orderId?{...o,archived:true}:o)); }
+    if(USE_REMOTE){
+      void postAction({ path:'action', type:'MADE_SPLIT', factory_code:order.factoryCode, lot_id:order.lotId, flavor_id:ln.flavorId, payload:{ packs, grams:gramsMade, manufactured_at:manufacturedAt, sub_no:subNo } }).catch(err=>console.error(err));
+    }
+  },[findFlavor,producedPacksByLot,setOrders,setSplitLogs,splitLogs]);
+
   return (<div className="grid md:grid-cols-2 gap-6 items-start">
     <div className="flex items-center gap-3"><Label>製造場所</Label><Select value={factory} onValueChange={setFactory}><SelectTrigger className="w-56"><SelectValue/></SelectTrigger><SelectContent>{factories.map(f=> <SelectItem key={f.code} value={f.code}>{f.name}（{f.code}）</SelectItem>)}</SelectContent></Select></div>
     <div className="md:col-span-2 grid md:grid-cols-2 gap-6">
       <KanbanColumn title="製造指示" icon={<ChefHat className="h-4 w-4"/>} rightSlot={<Button variant="outline" onClick={()=>setExtraOpen(true)} className="gap-1"><Plus className="h-4 w-4"/>追加で作成</Button>}>
-        {openOrders.map(o=> <OrderCardView key={o.orderId} order={o} onArchive={()=>setOrders(orders.map(od=>od.orderId===o.orderId?{...od,archived:true}:od))} onAddStorage={e=>setStorage([...storage,...e])} remainingPacks={Math.max(0,(o.lines[0].packs||0)-producedPacksByLot(o.lotId))} splitLogs={splitLogs.filter(s=>s.lotId===o.lotId)} onAddSplit={addSplit}/> ) }
+        {openOrders.map(o=> <OrderCardView key={o.orderId} order={o} onArchive={()=>setOrders(prev=>prev.map(od=>od.orderId===o.orderId?{...od,archived:true}:od))} onAddStorage={entries=>setStorage(prev=>[...prev,...entries])} remainingPacks={Math.max(0,(o.lines[0].packs||0)-producedPacksByLot(o.lotId))} splitLogs={splitLogs.filter(s=>s.lotId===o.lotId)} onAddSplit={addSplit} findFlavor={findFlavor} storageByFactory={storageByFactory}/> ) }
         {openOrders.length===0 && <Empty>ここにカードが表示されます</Empty>}
       </KanbanColumn>
       <KanbanColumn title="保管（在庫）" icon={<Warehouse className="h-4 w-4"/>}>
-        {storageAgg.map(sa=> <StorageCardView key={sa.lotId} agg={sa} onUse={(qty,leftoverQty,location)=>{setStorage(p=>[...p,{lotId:sa.lotId,factoryCode:factory,flavorId:sa.flavorId,location,grams:-qty,manufacturedAt:sa.manufacturedAt}]);if(leftoverQty>0)setStorage(p=>[...p,{lotId:sa.lotId,factoryCode:factory,flavorId:sa.flavorId,location,grams:leftoverQty,manufacturedAt:sa.manufacturedAt}]);}} onWaste={(qty,reason,location)=>{if(typeof qty==='number'){setStorage(p=>[...p,{lotId:sa.lotId,factoryCode:factory,flavorId:sa.flavorId,location,grams:-Math.abs(qty),manufacturedAt:sa.manufacturedAt}]);}}}/>)}
+        {storageAgg.map(sa=> <StorageCardView key={sa.lotId} agg={sa} onUse={(qty,leftoverQty,location)=>{setStorage(prev=>{const next=[...prev,{lotId:sa.lotId,factoryCode:factory,flavorId:sa.flavorId,location,grams:-qty,manufacturedAt:sa.manufacturedAt}]; if(leftoverQty>0){ next.push({lotId:sa.lotId,factoryCode:factory,flavorId:sa.flavorId,location,grams:leftoverQty,manufacturedAt:sa.manufacturedAt}); } return next;});}} onWaste={(qty,reason,location)=>{if(typeof qty==='number'){setStorage(prev=>[...prev,{lotId:sa.lotId,factoryCode:factory,flavorId:sa.flavorId,location,grams:-Math.abs(qty),manufacturedAt:sa.manufacturedAt}]);}}} findFlavor={findFlavor} calcExpiry={calcExpiry} factoryCode={factory}/>) }
         {storageAgg.length===0 && <Empty>余剰の在庫はここに集計されます</Empty>}
       </KanbanColumn>
     </div>
-    <OnsiteMakeDialog open={extraOpen} onClose={()=>setExtraOpen(false)} defaultFlavorId={flavors[0].id} factoryCode={factory} onRegister={registerOnsiteMake}/>
+    <OnsiteMakeDialog open={extraOpen} onClose={()=>setExtraOpen(false)} defaultFlavorId={flavors[0]?.id ?? ""} factoryCode={factory} onRegister={registerOnsiteMake} flavors={flavors} oemList={oemList} findFlavor={findFlavor} storageByFactory={storageByFactory}/>
   </div>);
 }
 
@@ -126,7 +286,7 @@ function KanbanColumn({title,icon,rightSlot,children}:{title:string;icon?:React.
 }
 const Empty=({children}:{children:React.ReactNode})=> (<div className="text-sm text-muted-foreground border rounded-xl p-6 text-center">{children}</div>);
 
-function OrderCardView({order,onArchive,onAddStorage,remainingPacks,splitLogs,onAddSplit}:{order:OrderCard;onArchive:()=>void;onAddStorage:(e:StorageEntry[])=>void;remainingPacks:number;splitLogs:SplitLog[];onAddSplit:(order:OrderCard,packs:number,manufacturedAt:string)=>void;}){
+function OrderCardView({order,onArchive,onAddStorage,remainingPacks,splitLogs,onAddSplit,findFlavor,storageByFactory}:{order:OrderCard;onArchive:()=>void;onAddStorage:(e:StorageEntry[])=>void;remainingPacks:number;splitLogs:SplitLog[];onAddSplit:(order:OrderCard,packs:number,manufacturedAt:string)=>void;findFlavor:(id:string)=>FlavorWithRecipe;storageByFactory:Record<string,string[]>;}){
   const [open,setOpen]=useState<null|"keep"|"made"|"skip"|"choice"|"split">(null); const ln=order.lines[0]; const flavor=findFlavor(ln.flavorId); const reset=()=>setOpen(null);
   const canSplit = ln.useType==='fissule' && ln.packs>0;
   return (<Card className="border rounded-xl"><CardContent className="pt-4 space-y-3">
@@ -138,10 +298,10 @@ function OrderCardView({order,onArchive,onAddStorage,remainingPacks,splitLogs,on
     </div>
     <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={()=>setOpen("keep")}>保管</Button><Button onClick={()=> setOpen("choice")}>作った</Button><Button variant="secondary" onClick={()=>setOpen("skip")}>作らない</Button></div>
   </CardContent>
-  <KeepDialog open={open==="keep"} onClose={reset} factoryCode={order.factoryCode} onSubmit={(loc,g,mfg)=>{onAddStorage([{lotId:order.lotId,factoryCode:order.factoryCode,location:loc,grams:g,flavorId:ln.flavorId,manufacturedAt:mfg}]);onArchive();reset();}}/>
-  <MadeDialog2 open={open==="made"} mode="bulk" onClose={reset} order={order} remaining={remainingPacks} onAddStorage={onAddStorage} onAddSplit={(packs,date)=>{onAddSplit(order,packs,date);}}/>
+  <KeepDialog open={open==="keep"} onClose={reset} factoryCode={order.factoryCode} flavorId={ln.flavorId} lotId={order.lotId} storageByFactory={storageByFactory} onSubmit={async (loc,g,mfg)=>{onAddStorage([{lotId:order.lotId,factoryCode:order.factoryCode,location:loc,grams:g,flavorId:ln.flavorId,manufacturedAt:mfg}]);onArchive();}}/>
+  <MadeDialog2 open={open==="made"} mode="bulk" onClose={reset} order={order} remaining={remainingPacks} onAddStorage={onAddStorage} onAddSplit={(packs,date)=>{onAddSplit(order,packs,date);}} findFlavor={findFlavor} storageByFactory={storageByFactory}/>
   <MadeChoiceDialog open={open==="choice"} onClose={reset} canSplit={canSplit} onBulk={()=>setOpen("made")} onSplit={()=>setOpen("split")}/>
-  <MadeDialog2 open={open==="split"} mode="split" onClose={reset} order={order} remaining={remainingPacks} onAddStorage={onAddStorage} onAddSplit={(packs,date)=>{onAddSplit(order,packs,date);}}/>
+  <MadeDialog2 open={open==="split"} mode="split" onClose={reset} order={order} remaining={remainingPacks} onAddStorage={onAddStorage} onAddSplit={(packs,date)=>{onAddSplit(order,packs,date);}} findFlavor={findFlavor} storageByFactory={storageByFactory}/>
   <Dialog open={open==="skip"} onOpenChange={(o)=>{if(!o)reset();}}><DialogContent><DialogHeader><DialogTitle>作らない理由（任意）</DialogTitle></DialogHeader></DialogContent></Dialog>
   </Card>);
 }
@@ -153,19 +313,32 @@ function MadeChoiceDialog({open,onClose,canSplit,onBulk,onSplit}:{open:boolean;o
   </DialogContent></Dialog>);
 }
 
-function KeepDialog({open,onClose,factoryCode,onSubmit}:{open:boolean;onClose:()=>void;factoryCode:string;onSubmit:(location:string,grams:number,manufacturedAt:string)=>void;}){
+function KeepDialog({open,onClose,factoryCode,flavorId,lotId,storageByFactory,onSubmit}:{open:boolean;onClose:()=>void;factoryCode:string;flavorId:string;lotId:string;storageByFactory:Record<string,string[]>;onSubmit:(location:string,grams:number,manufacturedAt:string)=>Promise<void>|void;}){
   const [loc,setLoc]=useState(""); const [g,setG]=useState(0); const [mfg,setMfg]=useState(format(new Date(),"yyyy-MM-dd")); const locs=storageByFactory[factoryCode]||[];
+  useEffect(()=>{ if(open){ setLoc(""); setG(0); setMfg(format(new Date(),"yyyy-MM-dd")); } },[open]);
+  const handleSubmit=async()=>{
+    if(!loc||g<=0||!mfg) return;
+    await onSubmit(loc,g,mfg);
+    if(USE_REMOTE){
+      try {
+        await postAction({ path:'action', type:'KEEP', factory_code:factoryCode, lot_id:lotId, flavor_id:flavorId, payload:{ location:loc, grams:g, manufactured_at:mfg } });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    onClose();
+  };
   return (<Dialog open={open} onOpenChange={(o)=>{if(!o)onClose();}}><DialogContent><DialogHeader><DialogTitle>保管登録</DialogTitle></DialogHeader>
     <div className="grid gap-3"><div className="grid grid-cols-1 md:grid-cols-3 gap-3">
       <div><Label>保管場所</Label><Select value={loc} onValueChange={setLoc}><SelectTrigger><SelectValue placeholder="選択"/></SelectTrigger><SelectContent>{locs.map(l=> <SelectItem key={l} value={l}>{l}</SelectItem>)}</SelectContent></Select></div>
       <div><Label>数量（g）</Label><Input type="number" value={g} onChange={e=>setG(parseInt(e.target.value||"0"))}/></div>
       <div><Label>製造日</Label><Input type="date" value={mfg} onChange={e=>setMfg(e.target.value)}/></div>
     </div></div>
-    <DialogFooter><Button variant="secondary" onClick={onClose}>キャンセル</Button><Button disabled={!loc||g<=0||!mfg} onClick={()=>onSubmit(loc,g,mfg)}>登録</Button></DialogFooter>
+    <DialogFooter><Button variant="secondary" onClick={onClose}>キャンセル</Button><Button disabled={!loc||g<=0||!mfg} onClick={handleSubmit}>登録</Button></DialogFooter>
   </DialogContent></Dialog>);
 }
 
-function MadeDialog2({open,onClose,order,mode,remaining,onAddStorage,onAddSplit}:{open:boolean;onClose:()=>void;order:OrderCard;mode:'bulk'|'split';remaining:number;onAddStorage:(e:StorageEntry[])=>void;onAddSplit:(packs:number,date:string)=>void;}){
+function MadeDialog2({open,onClose,order,mode,remaining,onAddStorage,onAddSplit,findFlavor,storageByFactory}:{open:boolean;onClose:()=>void;order:OrderCard;mode:'bulk'|'split';remaining:number;onAddStorage:(e:StorageEntry[])=>void;onAddSplit:(packs:number,date:string)=>void;findFlavor:(id:string)=>FlavorWithRecipe;storageByFactory:Record<string,string[]>;}){
   const [checked,setChecked]=useState<Record<string,boolean>>({});
   const [recipeQty,setRecipeQty]=useState<Record<string,number>>({});
   const [mfg,setMfg]=useState(format(new Date(),"yyyy-MM-dd"));
@@ -182,16 +355,19 @@ function MadeDialog2({open,onClose,order,mode,remaining,onAddStorage,onAddSplit}
       flavor.recipe.forEach(r=>{init[r.ingredient]=r.qty});
       setRecipeQty(init);
       setChecked({});
-      // default packs: order requested packs (clamped by remaining) for bulk, otherwise 0
       const def = showPackInput ? (mode==='bulk' ? Math.max(0, Math.min(ln.packs||0, remaining||ln.packs||0)) : 0) : 0;
       setPacksMade(def);
+      setOutcome('');
+      setLeftLoc('');
+      setLeftG(0);
+      setMfg(format(new Date(),"yyyy-MM-dd"));
     }
   },[open,flavor,ln.packs,mode,remaining,showPackInput]);
   const allChecked=flavor.recipe.every(r=>checked[r.ingredient]);
   const tooMuch = showPackInput && packsMade>Math.max(0,remaining);
   const submit=()=>{
     if(showPackInput){
-      if(packsMade<=0||tooMuch) return; // guard
+      if(packsMade<=0||tooMuch) return;
       onAddSplit(packsMade,mfg);
     } else {
       // OEM: treat as already consumed/used; no split log
@@ -250,10 +426,11 @@ function MadeDialog2({open,onClose,order,mode,remaining,onAddStorage,onAddSplit}
   );
 }
 
-
-function OnsiteMakeDialog({open,onClose,defaultFlavorId,factoryCode,onRegister}:{open:boolean;onClose:()=>void;defaultFlavorId:string;factoryCode:string;onRegister:(factoryCode:string,flavorId:string,useType:'fissule'|'oem',producedG:number,manufacturedAt:string,oemPartner?:string,leftover?:{loc:string;grams:number})=>void;}){
-  const [flavorId,setFlavorId]=useState(defaultFlavorId); const f=findFlavor(flavorId); const [mfg,setMfg]=useState(format(new Date(),"yyyy-MM-dd")); const [useType,setUseType]=useState<'fissule'|'oem'>('fissule'); const [oemPartner,setOemPartner]=useState(oemList[0]); const [checked,setChecked]=useState<Record<string,boolean>>({}); const [qty,setQty]=useState<Record<string,number>>({}); const [outcome,setOutcome]=useState<'extra'|'used'|''>(''); const [leftLoc,setLeftLoc]=useState(""); const [leftG,setLeftG]=useState(0);
-  const sum=Object.keys(qty).reduce((acc,k)=>acc+(checked[k]?(qty[k]||0):0),0); useEffect(()=>{setChecked({});setQty({});},[flavorId]);
+function OnsiteMakeDialog({open,onClose,defaultFlavorId,factoryCode,onRegister,flavors,oemList,findFlavor,storageByFactory}:{open:boolean;onClose:()=>void;defaultFlavorId:string;factoryCode:string;onRegister:(factoryCode:string,flavorId:string,useType:'fissule'|'oem',producedG:number,manufacturedAt:string,oemPartner?:string,leftover?:{loc:string;grams:number})=>void;flavors:FlavorWithRecipe[];oemList:string[];findFlavor:(id:string)=>FlavorWithRecipe;storageByFactory:Record<string,string[]>;}){
+  const [flavorId,setFlavorId]=useState(defaultFlavorId); const f=findFlavor(flavorId); const [mfg,setMfg]=useState(format(new Date(),"yyyy-MM-dd")); const [useType,setUseType]=useState<'fissule'|'oem'>('fissule'); const [oemPartner,setOemPartner]=useState(oemList[0] ?? ""); const [checked,setChecked]=useState<Record<string,boolean>>({}); const [qty,setQty]=useState<Record<string,number>>({}); const [outcome,setOutcome]=useState<'extra'|'used'|''>(''); const [leftLoc,setLeftLoc]=useState(""); const [leftG,setLeftG]=useState(0);
+  const sum=Object.keys(qty).reduce((acc,k)=>acc+(checked[k]?(qty[k]||0):0),0);
+  useEffect(()=>{setChecked({});setQty({});},[flavorId]);
+  useEffect(()=>{if(open){setFlavorId(defaultFlavorId); setUseType('fissule'); setOemPartner(oemList[0] ?? ""); setOutcome(''); setLeftLoc(''); setLeftG(0); setMfg(format(new Date(),"yyyy-MM-dd"));}},[open,defaultFlavorId,oemList]);
   const submit=()=>{onRegister(factoryCode,flavorId,useType,sum,mfg,useType==='oem'?oemPartner:undefined,outcome==='extra'?{loc:leftLoc,grams:leftG}:undefined);onClose();};
   return (<Dialog open={open} onOpenChange={(o)=>{if(!o)onClose();}}><DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>追加で作成（現場報告）</DialogTitle></DialogHeader>
     <div className="grid md:grid-cols-3 gap-3"><div className="md:col-span-1"><Label>レシピ</Label><Select value={flavorId} onValueChange={setFlavorId}><SelectTrigger><SelectValue/></SelectTrigger><SelectContent>{flavors.map(fl=> <SelectItem key={fl.id} value={fl.id}>{fl.flavorName}</SelectItem>)}</SelectContent></Select></div><div><Label>用途</Label><Select value={useType} onValueChange={(value: 'fissule' | 'oem') => setUseType(value)}><SelectTrigger><SelectValue/></SelectTrigger><SelectContent><SelectItem value="fissule">製品</SelectItem><SelectItem value="oem">OEM</SelectItem></SelectContent></Select></div><div><Label>製造日</Label><Input type="date" value={mfg} onChange={(e)=>setMfg(e.target.value)}/></div></div>
@@ -264,11 +441,49 @@ function OnsiteMakeDialog({open,onClose,defaultFlavorId,factoryCode,onRegister}:
   </DialogContent></Dialog>);
 }
 
-function StorageCardView({agg,onUse,onWaste}:{agg:{lotId:string;grams:number;locations:Set<string>;flavorId:string;manufacturedAt:string},onUse:(usedQty:number,leftover:number,location:string)=>void,onWaste:(qtyOrText:number|string,reason:'expiry'|'mistake'|'other',location:string)=>void}){
+function StorageCardView({agg,onUse,onWaste,findFlavor,calcExpiry,factoryCode}:{agg:{lotId:string;grams:number;locations:Set<string>;flavorId:string;manufacturedAt:string};onUse:(usedQty:number,leftover:number,location:string)=>Promise<void>|void;onWaste:(qtyOrText:number|string,reason:'expiry'|'mistake'|'other',location:string)=>Promise<void>|void;findFlavor:(id:string)=>FlavorWithRecipe;calcExpiry:(manufacturedAt:string,flavorId:string)=>string;factoryCode:string;}){
   const [useOpen,setUseOpen]=useState(false); const [wasteOpen,setWasteOpen]=useState(false);
   const [useQty,setUseQty]=useState(0); const [useOutcome,setUseOutcome]=useState<'extra'|'none'|'shortage'|''>(''); const [leftQty,setLeftQty]=useState(0); const [loc,setLoc]=useState<string>(Array.from(agg.locations)[0]||"");
   const [wasteReason,setWasteReason]=useState<'expiry'|'mistake'|'other'|''>(''); const [wasteQty,setWasteQty]=useState(0); const [wasteText,setWasteText]=useState("");
   const flavor=findFlavor(agg.flavorId); const expiry=calcExpiry(agg.manufacturedAt,agg.flavorId);
+  useEffect(()=>{ if(useOpen){ setUseQty(0); setUseOutcome(''); setLeftQty(0); setLoc(Array.from(agg.locations)[0]||"");} },[useOpen,agg.locations]);
+  useEffect(()=>{ if(wasteOpen){ setWasteReason(''); setWasteQty(0); setWasteText(""); setLoc(Array.from(agg.locations)[0]||""); } },[wasteOpen,agg.locations]);
+  const effectiveLocation = (current:string)=> current || Array.from(agg.locations)[0] || '';
+  const handleUse=async()=>{
+    const location = effectiveLocation(loc);
+    await onUse(useQty,useOutcome==='extra'?leftQty:0,location);
+    if(USE_REMOTE){
+      try {
+        await postAction({ path:'action', type:'USE', factory_code:factoryCode, lot_id:agg.lotId, flavor_id:agg.flavorId, payload:{ qty:useQty, location } });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    setUseOpen(false);
+  };
+  const handleWaste=async()=>{
+    const location = effectiveLocation(loc);
+    if(wasteReason==='other'){
+      await onWaste(wasteText,'other',location);
+      if(USE_REMOTE){
+        try {
+          await postAction({ path:'action', type:'WASTE', factory_code:factoryCode, lot_id:agg.lotId, flavor_id:agg.flavorId, payload:{ reason:'other', note:wasteText, location } });
+        } catch (err) {
+          console.error(err);
+        }
+      }
+    } else if(wasteReason){
+      await onWaste(wasteQty,wasteReason,location);
+      if(USE_REMOTE){
+        try {
+          await postAction({ path:'action', type:'WASTE', factory_code:factoryCode, lot_id:agg.lotId, flavor_id:agg.flavorId, payload:{ reason:wasteReason, qty:wasteQty, location } });
+        } catch (err) {
+          console.error(err);
+        }
+      }
+    }
+    setWasteOpen(false);
+  };
   return (<Card className="border rounded-xl"><CardContent className="pt-4 space-y-3">
     <div className="flex items-center justify-between"><div className="font-medium">{agg.lotId}</div></div>
     <div className="grid md:grid-cols-2 gap-4"><Field label="味付け">{flavor?.flavorName||'-'}</Field><Field label="保管場所">{Array.from(agg.locations).join(' / ')||'-'}</Field></div>
@@ -279,14 +494,15 @@ function StorageCardView({agg,onUse,onWaste}:{agg:{lotId:string;grams:number;loc
     <div className="grid gap-3"><div className="grid grid-cols-2 gap-3"><div><Label>使用量（g）</Label><Input type="number" value={useQty} onChange={e=>setUseQty(parseInt(e.target.value||"0"))}/></div><div><Label>結果</Label><Select value={useOutcome} onValueChange={(value: 'extra' | 'none' | 'shortage') => setUseOutcome(value)}><SelectTrigger><SelectValue placeholder="選択"/></SelectTrigger><SelectContent><SelectItem value="extra">余った</SelectItem><SelectItem value="none">余らず</SelectItem><SelectItem value="shortage">不足</SelectItem></SelectContent></Select></div></div>
       {(useOutcome==='extra') && (<div className="grid grid-cols-2 gap-3"><div><Label>余り数量（g）</Label><Input type="number" value={leftQty} onChange={e=>setLeftQty(parseInt(e.target.value||"0"))}/></div><div><Label>保管場所</Label><Select value={loc} onValueChange={setLoc}><SelectTrigger><SelectValue/></SelectTrigger><SelectContent>{Array.from(agg.locations).map(l=> <SelectItem key={l} value={l}>{l}</SelectItem>)}</SelectContent></Select></div></div>)}
     </div>
-    <DialogFooter><Button variant="secondary" onClick={()=>setUseOpen(false)}>キャンセル</Button><Button disabled={useQty<=0||(useOutcome==='extra'&&(leftQty<=0||!loc))} onClick={()=>{onUse(useQty,useOutcome==='extra'?leftQty:0,loc);setUseOpen(false);}}>登録</Button></DialogFooter>
+    <DialogFooter><Button variant="secondary" onClick={()=>setUseOpen(false)}>キャンセル</Button><Button disabled={useQty<=0||(useOutcome==='extra'&&(leftQty<=0||!effectiveLocation(loc)))} onClick={handleUse}>登録</Button></DialogFooter>
   </DialogContent></Dialog>
   <Dialog open={wasteOpen} onOpenChange={setWasteOpen}><DialogContent><DialogHeader><DialogTitle>廃棄記録</DialogTitle></DialogHeader>
     <div className="grid gap-3"><div><Label>理由</Label><Select value={wasteReason} onValueChange={(value: 'expiry' | 'mistake' | 'other') => setWasteReason(value)}><SelectTrigger><SelectValue placeholder="選択"/></SelectTrigger><SelectContent><SelectItem value="expiry">賞味期限</SelectItem><SelectItem value="mistake">製造ミス</SelectItem><SelectItem value="other">その他</SelectItem></SelectContent></Select></div>
       {(wasteReason==='expiry'||wasteReason==='mistake') && (<div className="grid grid-cols-2 gap-3"><div><Label>廃棄量（g）</Label><Input type="number" value={wasteQty} onChange={e=>setWasteQty(parseInt(e.target.value||'0'))}/></div><div><Label>保管場所</Label><Select value={loc} onValueChange={setLoc}><SelectTrigger><SelectValue placeholder="選択"/></SelectTrigger><SelectContent>{Array.from(agg.locations).map(l=> <SelectItem key={l} value={l}>{l}</SelectItem>)}</SelectContent></Select></div></div>)}
       {wasteReason==='other' && (<div><Label>理由（自由記述）</Label><Input value={wasteText} onChange={(e)=>setWasteText(e.target.value)} placeholder="例）サンプル提供など"/></div>)}
     </div>
-    <DialogFooter><Button variant="secondary" onClick={()=>setWasteOpen(false)}>キャンセル</Button><Button disabled={wasteReason===''||((wasteReason==='expiry'||wasteReason==='mistake')&&(wasteQty<=0||!loc))||(wasteReason==='other'&&wasteText.trim()==='')} onClick={()=>{if(wasteReason==='other'){onWaste(wasteText,'other',loc);}else if (wasteReason){onWaste(wasteQty,wasteReason,loc);}setWasteOpen(false);}}>登録</Button></DialogFooter>
+    <DialogFooter><Button variant="secondary" onClick={()=>setWasteOpen(false)}>キャンセル</Button><Button disabled={wasteReason===''||((wasteReason==='expiry'||wasteReason==='mistake')&&(wasteQty<=0||!effectiveLocation(loc)))||(wasteReason==='other'&&wasteText.trim()==='')} onClick={handleWaste}>登録</Button></DialogFooter>
   </DialogContent></Dialog>
   </Card>);
 }
+
