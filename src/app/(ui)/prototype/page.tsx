@@ -1,4 +1,5 @@
 'use client';
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 import React, { useMemo, useState, useEffect } from "react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -97,7 +98,7 @@ function Office({orders,setOrders,seq,setSeq}:{orders:OrderCard[];setOrders:(x:O
   </div>);
 }
 
-function Floor({orders,setOrders,storage,setStorage,registerOnsiteMake}:{orders:OrderCard[];setOrders:(x:OrderCard[])=>void;storage:StorageEntry[];setStorage:(x:StorageEntry[])=>void;registerOnsiteMake:(factoryCode:string,flavorId:string,useType:'fissule'|'oem',producedG:number,manufacturedAt:string,oemPartner?:string,leftover?:{loc:string;grams:number})=>void;}){
+function Floor({orders,setOrders,storage,setStorage,registerOnsiteMake}:{orders:OrderCard[];setOrders:React.Dispatch<React.SetStateAction<OrderCard[]>>;storage:StorageEntry[];setStorage:React.Dispatch<React.SetStateAction<StorageEntry[]>>;registerOnsiteMake:(factoryCode:string,flavorId:string,useType:'fissule'|'oem',producedG:number,manufacturedAt:string,oemPartner?:string,leftover?:{loc:string;grams:number})=>void;}){
   const [factory,setFactory]=useState(factories[0].code); const [extraOpen,setExtraOpen]=useState(false);
   const openOrders=useMemo(()=>orders.filter(o=>!o.archived&&o.factoryCode===factory),[orders,factory]);
   const storageAgg=useMemo(()=>{const map=new Map<string,{lotId:string;grams:number;locations:Set<string>;flavorId:string;manufacturedAt:string}>();for(const s of storage.filter(s=>s.factoryCode===factory)){const k=s.lotId;const e=map.get(k)||{lotId:k,grams:0,locations:new Set<string>(),flavorId:s.flavorId,manufacturedAt:s.manufacturedAt};e.grams+=s.grams;e.locations.add(s.location);if(!e.manufacturedAt)e.manufacturedAt=s.manufacturedAt;map.set(k,e);}return Array.from(map.values());},[storage,factory]);
