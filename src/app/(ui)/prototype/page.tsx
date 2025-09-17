@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useMemo, useState, useEffect, useCallback } from "react";
+import { useSWRConfig } from "swr";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,8 +13,11 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Package, Warehouse, Archive, Beaker, Factory, Trash2, Boxes, ChefHat } from "lucide-react";
 import { format } from "date-fns";
-import { useMasters, useOrders, useStorageAgg, postAction } from '@/lib/sheets/hooks';
-import type { Masters, OrderRow, StorageAggRow } from '@/lib/sheets/types';
+import { apiPost } from "@/lib/gas";
+import { useMasters } from "@/hooks/useMasters";
+import { useOrders, ordersKey } from "@/hooks/useOrders";
+import { useStorageAgg, storageAggKey } from "@/hooks/useStorageAgg";
+import type { Masters, OrderRow, StorageAggRow } from "@/lib/sheets/types";
 
 const USE_REMOTE = process.env.NEXT_PUBLIC_USE_SHEETS === '1';
 
@@ -97,6 +101,7 @@ function deriveDataFromMasters(masters?: Masters) {
 }
 
 export default function App(){
+  const { mutate } = useSWRConfig();
   const [tab,setTab]=useState("office");
   const mastersQuery = useMasters(USE_REMOTE);
   const mastersData = mastersQuery?.data;
@@ -121,7 +126,7 @@ export default function App(){
   const [storage,setStorage]=useState<StorageEntry[]>([]);
   const [splitLogs,setSplitLogs]=useState<SplitLog[]>([]);
 
-  const registerOnsiteMake=useCallback((factoryCode:string,flavorId:string,useType:'fissule'|'oem',producedG:number,manufacturedAt:string,oemPartner?:string,leftover?:{loc:string;grams:number})=>{
+  const registerOnsiteMake=useCallback(async(factoryCode:string,flavorId:string,useType:'fissule'|'oem',producedG:number,manufacturedAt:string,oemPartner?:string,leftover?:{loc:string;grams:number})=>{
     const lot=genOnsiteLotId(factoryCode,onsiteSeq,new Date(manufacturedAt));
     const newOrder:OrderCard={orderId:`OS-${String(onsiteSeq).padStart(3,'0')}`,lotId:lot,factoryCode,orderedAt:manufacturedAt,archived:true,lines:[useType==='fissule'?{flavorId,packs:0,requiredGrams:producedG,useType}:{flavorId,packs:0,requiredGrams:producedG,useType,oemPartner,oemGrams:producedG}]};
     setOrders(prev=>[newOrder,...prev]);
@@ -129,7 +134,26 @@ export default function App(){
       setStorage(prev=>[...prev,{lotId:lot,factoryCode,flavorId,location:leftover.loc,grams:leftover.grams,manufacturedAt}]);
     }
     setOnsiteSeq(s=>s+1);
-  },[onsiteSeq]);
+    if(USE_REMOTE){
+      try {
+        await apiPost("onsite-make", {
+          factory_code: factoryCode,
+          flavor_id: flavorId,
+          use_type: useType,
+          produced_grams: producedG,
+          manufactured_at: manufacturedAt,
+          oem_partner: oemPartner ?? null,
+          leftover: leftover ? { location: leftover.loc, grams: leftover.grams } : null,
+        });
+        await Promise.all([
+          mutate(ordersKey(factoryCode)),
+          mutate(storageAggKey(factoryCode)),
+        ]);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  },[mutate,onsiteSeq]);
 
   return (<div className="min-h-screen bg-orange-50 p-6 mx-auto max-w-7xl space-y-6"><header className="flex items-center justify-between"><h1 className="text-2xl font-semibold">調味液日報 UI プロトタイプ</h1><div className="text-sm opacity-80">タブで「オフィス / 現場」を切替</div></header>
     <Tabs value={tab} onValueChange={setTab}><TabsList className="grid grid-cols-2 w-full md:w-96"><TabsTrigger value="office" className="flex gap-2"><Factory className="h-4 w-4"/>オフィス（5F/管理）</TabsTrigger><TabsTrigger value="floor" className="flex gap-2"><Boxes className="h-4 w-4"/>現場（フロア）</TabsTrigger></TabsList>
@@ -140,6 +164,7 @@ export default function App(){
 }
 
 function Office({orders,setOrders,seq,setSeq,factories,flavors,oemList,findFlavor}:{orders:OrderCard[];setOrders:React.Dispatch<React.SetStateAction<OrderCard[]>>;seq:number;setSeq:React.Dispatch<React.SetStateAction<number>>;factories:{code:string;name:string}[];flavors:FlavorWithRecipe[];oemList:string[];findFlavor:(id:string)=>FlavorWithRecipe;}){
+  const { mutate } = useSWRConfig();
   const [factory,setFactory]=useState(factories[0]?.code ?? ""); const [flavor,setFlavor]=useState(flavors[0]?.id ?? ""); const [useType,setUseType]=useState<'fissule'|'oem'>('fissule'); const [packs,setPacks]=useState(100); const [oemPartner,setOemPartner]=useState(oemList[0] ?? ""); const [oemGrams,setOemGrams]=useState(0);
 
   useEffect(()=>{ if(factories.length && !factories.some(f=>f.code===factory)){ setFactory(factories[0].code);} },[factories,factory]);
@@ -155,7 +180,7 @@ function Office({orders,setOrders,seq,setSeq,factories,flavors,oemList,findFlavo
     return {flavorId,packs:0,requiredGrams:gramsVal,useType,oemPartner,oemGrams:gramsVal};
   },[findFlavor]);
 
-  const createOrder=()=>{
+  const createOrder=async()=>{
     if(!factory||!flavor) return;
     const today=new Date();
     const lot=genLotId(factory,seq,today);
@@ -164,6 +189,28 @@ function Office({orders,setOrders,seq,setSeq,factories,flavors,oemList,findFlavo
     const newOrder:OrderCard={orderId:`O-${String(seq).padStart(3,"0")}`,lotId:lot,factoryCode:factory,orderedAt:format(today,"yyyy-MM-dd"),lines:[line]};
     setOrders(prev=>[newOrder,...prev]);
     setSeq(n=>n+1);
+    if(USE_REMOTE){
+      try {
+        await apiPost("orders-create", {
+          factory_code: factory,
+          lot_id: lot,
+          ordered_at: format(today,"yyyy-MM-dd"),
+          lines: [
+            {
+              flavor_id: line.flavorId,
+              use_type: line.useType,
+              packs: line.packs ?? 0,
+              required_grams: line.requiredGrams,
+              oem_partner: line.oemPartner ?? null,
+              oem_grams: line.oemGrams ?? null,
+            },
+          ],
+        });
+        await mutate(ordersKey(factory));
+      } catch (err) {
+        console.error(err);
+      }
+    }
   };
 
   return (<div className="grid md:grid-cols-2 gap-6">
@@ -201,7 +248,8 @@ function Office({orders,setOrders,seq,setSeq,factories,flavors,oemList,findFlavo
   </div>);
 }
 
-function Floor({orders,setOrders,storage,setStorage,registerOnsiteMake,splitLogs,setSplitLogs,factories,flavors,findFlavor,storageByFactory,oemList,calcExpiry}:{orders:OrderCard[];setOrders:React.Dispatch<React.SetStateAction<OrderCard[]>>;storage:StorageEntry[];setStorage:React.Dispatch<React.SetStateAction<StorageEntry[]>>;registerOnsiteMake:(factoryCode:string,flavorId:string,useType:'fissule'|'oem',producedG:number,manufacturedAt:string,oemPartner?:string,leftover?:{loc:string;grams:number})=>void;splitLogs:SplitLog[];setSplitLogs:React.Dispatch<React.SetStateAction<SplitLog[]>>;factories:{code:string;name:string}[];flavors:FlavorWithRecipe[];findFlavor:(id:string)=>FlavorWithRecipe;storageByFactory:Record<string,string[]>;oemList:string[];calcExpiry:(manufacturedAt:string,flavorId:string)=>string;}){
+function Floor({orders,setOrders,storage,setStorage,registerOnsiteMake,splitLogs,setSplitLogs,factories,flavors,findFlavor,storageByFactory,oemList,calcExpiry}:{orders:OrderCard[];setOrders:React.Dispatch<React.SetStateAction<OrderCard[]>>;storage:StorageEntry[];setStorage:React.Dispatch<React.SetStateAction<StorageEntry[]>>;registerOnsiteMake:(factoryCode:string,flavorId:string,useType:'fissule'|'oem',producedG:number,manufacturedAt:string,oemPartner?:string,leftover?:{loc:string;grams:number})=>Promise<void>|void;splitLogs:SplitLog[];setSplitLogs:React.Dispatch<React.SetStateAction<SplitLog[]>>;factories:{code:string;name:string}[];flavors:FlavorWithRecipe[];findFlavor:(id:string)=>FlavorWithRecipe;storageByFactory:Record<string,string[]>;oemList:string[];calcExpiry:(manufacturedAt:string,flavorId:string)=>string;}){
+  const { mutate } = useSWRConfig();
   const [factory,setFactory]=useState(factories[0]?.code ?? ""); const [extraOpen,setExtraOpen]=useState(false);
 
   useEffect(()=>{ if(!factories.length){ setFactory(""); return;} if(!factory || !factories.some(f=>f.code===factory)){ setFactory(factories[0].code);} },[factories,factory]);
@@ -253,7 +301,7 @@ function Floor({orders,setOrders,storage,setStorage,registerOnsiteMake,splitLogs
 
   const producedPacksByLot=useCallback((lotId:string)=> splitLogs.filter(l=>l.lotId===lotId).reduce((a,b)=>a+b.packs,0),[splitLogs]);
 
-  const addSplit=useCallback((order:OrderCard,packs:number,manufacturedAt:string)=>{
+  const addSplit=useCallback(async(order:OrderCard,packs:number,manufacturedAt:string)=>{
     const ln=order.lines[0];
     const subNo=splitLogs.filter(l=>l.lotId===order.lotId).length+1;
     const gramsMade=packs*(findFlavor(ln.flavorId)?.packToGram ?? 0);
@@ -261,9 +309,17 @@ function Floor({orders,setOrders,storage,setStorage,registerOnsiteMake,splitLogs
     const total=producedPacksByLot(order.lotId)+packs;
     if(ln.packs>0 && total>=ln.packs){ setOrders(os=> os.map(o=> o.orderId===order.orderId?{...o,archived:true}:o)); }
     if(USE_REMOTE){
-      void postAction({ path:'action', type:'MADE_SPLIT', factory_code:order.factoryCode, lot_id:order.lotId, flavor_id:ln.flavorId, payload:{ packs, grams:gramsMade, manufactured_at:manufacturedAt, sub_no:subNo } }).catch(err=>console.error(err));
+      try {
+        await apiPost("action", { type:'MADE_SPLIT', factory_code:order.factoryCode, lot_id:order.lotId, flavor_id:ln.flavorId, payload:{ packs, grams:gramsMade, manufactured_at:manufacturedAt, sub_no:subNo } });
+        await Promise.all([
+          mutate(ordersKey(order.factoryCode)),
+          mutate(storageAggKey(order.factoryCode)),
+        ]);
+      } catch (err) {
+        console.error(err);
+      }
     }
-  },[findFlavor,producedPacksByLot,setOrders,setSplitLogs,splitLogs]);
+  },[findFlavor,mutate,producedPacksByLot,setOrders,setSplitLogs,splitLogs]);
 
   return (<div className="grid md:grid-cols-2 gap-6 items-start">
     <div className="flex items-center gap-3"><Label>製造場所</Label><Select value={factory} onValueChange={setFactory}><SelectTrigger className="w-56"><SelectValue/></SelectTrigger><SelectContent>{factories.map(f=> <SelectItem key={f.code} value={f.code}>{f.name}（{f.code}）</SelectItem>)}</SelectContent></Select></div>
@@ -314,6 +370,7 @@ function MadeChoiceDialog({open,onClose,canSplit,onBulk,onSplit}:{open:boolean;o
 }
 
 function KeepDialog({open,onClose,factoryCode,flavorId,lotId,storageByFactory,onSubmit}:{open:boolean;onClose:()=>void;factoryCode:string;flavorId:string;lotId:string;storageByFactory:Record<string,string[]>;onSubmit:(location:string,grams:number,manufacturedAt:string)=>Promise<void>|void;}){
+  const { mutate } = useSWRConfig();
   const [loc,setLoc]=useState(""); const [g,setG]=useState(0); const [mfg,setMfg]=useState(format(new Date(),"yyyy-MM-dd")); const locs=storageByFactory[factoryCode]||[];
   useEffect(()=>{ if(open){ setLoc(""); setG(0); setMfg(format(new Date(),"yyyy-MM-dd")); } },[open]);
   const handleSubmit=async()=>{
@@ -321,7 +378,8 @@ function KeepDialog({open,onClose,factoryCode,flavorId,lotId,storageByFactory,on
     await onSubmit(loc,g,mfg);
     if(USE_REMOTE){
       try {
-        await postAction({ path:'action', type:'KEEP', factory_code:factoryCode, lot_id:lotId, flavor_id:flavorId, payload:{ location:loc, grams:g, manufactured_at:mfg } });
+        await apiPost("action", { type:'KEEP', factory_code:factoryCode, lot_id:lotId, flavor_id:flavorId, payload:{ location:loc, grams:g, manufactured_at:mfg } });
+        await mutate(storageAggKey(factoryCode));
       } catch (err) {
         console.error(err);
       }
@@ -442,6 +500,7 @@ function OnsiteMakeDialog({open,onClose,defaultFlavorId,factoryCode,onRegister,f
 }
 
 function StorageCardView({agg,onUse,onWaste,findFlavor,calcExpiry,factoryCode}:{agg:{lotId:string;grams:number;locations:Set<string>;flavorId:string;manufacturedAt:string};onUse:(usedQty:number,leftover:number,location:string)=>Promise<void>|void;onWaste:(qtyOrText:number|string,reason:'expiry'|'mistake'|'other',location:string)=>Promise<void>|void;findFlavor:(id:string)=>FlavorWithRecipe;calcExpiry:(manufacturedAt:string,flavorId:string)=>string;factoryCode:string;}){
+  const { mutate } = useSWRConfig();
   const [useOpen,setUseOpen]=useState(false); const [wasteOpen,setWasteOpen]=useState(false);
   const [useQty,setUseQty]=useState(0); const [useOutcome,setUseOutcome]=useState<'extra'|'none'|'shortage'|''>(''); const [leftQty,setLeftQty]=useState(0); const [loc,setLoc]=useState<string>(Array.from(agg.locations)[0]||"");
   const [wasteReason,setWasteReason]=useState<'expiry'|'mistake'|'other'|''>(''); const [wasteQty,setWasteQty]=useState(0); const [wasteText,setWasteText]=useState("");
@@ -454,7 +513,8 @@ function StorageCardView({agg,onUse,onWaste,findFlavor,calcExpiry,factoryCode}:{
     await onUse(useQty,useOutcome==='extra'?leftQty:0,location);
     if(USE_REMOTE){
       try {
-        await postAction({ path:'action', type:'USE', factory_code:factoryCode, lot_id:agg.lotId, flavor_id:agg.flavorId, payload:{ qty:useQty, location } });
+        await apiPost("action", { type:'USE', factory_code:factoryCode, lot_id:agg.lotId, flavor_id:agg.flavorId, payload:{ qty:useQty, location } });
+        await mutate(storageAggKey(factoryCode));
       } catch (err) {
         console.error(err);
       }
@@ -467,7 +527,8 @@ function StorageCardView({agg,onUse,onWaste,findFlavor,calcExpiry,factoryCode}:{
       await onWaste(wasteText,'other',location);
       if(USE_REMOTE){
         try {
-          await postAction({ path:'action', type:'WASTE', factory_code:factoryCode, lot_id:agg.lotId, flavor_id:agg.flavorId, payload:{ reason:'other', note:wasteText, location } });
+          await apiPost("action", { type:'WASTE', factory_code:factoryCode, lot_id:agg.lotId, flavor_id:agg.flavorId, payload:{ reason:'other', note:wasteText, location } });
+          await mutate(storageAggKey(factoryCode));
         } catch (err) {
           console.error(err);
         }
@@ -476,7 +537,8 @@ function StorageCardView({agg,onUse,onWaste,findFlavor,calcExpiry,factoryCode}:{
       await onWaste(wasteQty,wasteReason,location);
       if(USE_REMOTE){
         try {
-          await postAction({ path:'action', type:'WASTE', factory_code:factoryCode, lot_id:agg.lotId, flavor_id:agg.flavorId, payload:{ reason:wasteReason, qty:wasteQty, location } });
+          await apiPost("action", { type:'WASTE', factory_code:factoryCode, lot_id:agg.lotId, flavor_id:agg.flavorId, payload:{ reason:wasteReason, qty:wasteQty, location } });
+          await mutate(storageAggKey(factoryCode));
         } catch (err) {
           console.error(err);
         }
