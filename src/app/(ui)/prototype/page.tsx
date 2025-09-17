@@ -205,10 +205,10 @@ function StorageCardView({agg,onUse,onWaste}:{agg:{lotId:string;grams:number;loc
   </DialogContent></Dialog>
   <Dialog open={wasteOpen} onOpenChange={setWasteOpen}><DialogContent><DialogHeader><DialogTitle>廃棄記録</DialogTitle></DialogHeader>
     <div className="grid gap-3"><div><Label>理由</Label><Select value={wasteReason} onValueChange={(v:any)=>setWasteReason(v)}><SelectTrigger><SelectValue placeholder="選択"/></SelectTrigger><SelectContent><SelectItem value="expiry">賞味期限</SelectItem><SelectItem value="mistake">製造ミス</SelectItem><SelectItem value="other">その他</SelectItem></SelectContent></Select></div>
-      {(wasteReason==='expiry'||wasteReason==='mistake') && (<div className="grid grid-cols-2 gap-3"><div><Label>廃棄量（g）</Label><Input type="number" value={wasteQty} onChange={e=>setWasteQty(parseInt(e.target.value||'0'))}/></div><div><Label>保管場所</Label><Select value={loc} onValueChange={setLoc}><SelectTrigger><SelectValue placeholder="選択"/></SelectTrigger><SelectContent>{Array.from(agg.locations).map(l=> <SelectItem key={l} value={l}>{l}</SelectItem>)}</SelectContent></Select></div></div>)}
-      {wasteReason==='other' && (<div><Label>理由（自由記述）</Label><Input value={wasteText} onChange={(e)=>setWasteText(e.target.value)} placeholder="例）サンプル提供など"/></div>)}
+      {(wasteReason==='expiry'||wasteReason==='mistake'||wasteReason==='other') && (<div className="grid grid-cols-2 gap-3"><div><Label>廃棄量（g）</Label><Input type="number" value={wasteQty} onChange={e=>setWasteQty(parseInt(e.target.value||'0'))}/></div><div><Label>保管場所</Label><Select value={loc} onValueChange={setLoc}><SelectTrigger><SelectValue placeholder="選択"/></SelectTrigger><SelectContent>{Array.from(agg.locations).map(l=> <SelectItem key={l} value={l}>{l}</SelectItem>)}</SelectContent></Select></div></div>)}
+      {wasteReason==='other' && (<div><Label>理由（自由記述・任意）</Label><Input value={wasteText} onChange={(e)=>setWasteText(e.target.value)} placeholder="例）サンプル提供など"/></div>)}
     </div>
-    <DialogFooter><Button variant="secondary" onClick={()=>setWasteOpen(false)}>キャンセル</Button><Button disabled={wasteReason===''||((wasteReason==='expiry'||wasteReason==='mistake')&&(wasteQty<=0||!loc))||(wasteReason==='other'&&wasteText.trim()==='')} onClick={()=>{if(wasteReason==='other'){onWaste(wasteText,'other',loc);}else{onWaste(wasteQty,wasteReason as any,loc);}setWasteOpen(false);}}>登録</Button></DialogFooter>
+    <DialogFooter><Button variant="secondary" onClick={()=>setWasteOpen(false)}>キャンセル</Button><Button disabled={wasteReason===''||wasteQty<=0||!loc} onClick={()=>{onWaste(wasteQty,wasteReason as any,loc);setWasteOpen(false);}}>登録</Button></DialogFooter>
   </DialogContent></Dialog>
   </Card>);
 }
