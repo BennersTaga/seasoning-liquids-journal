@@ -110,7 +110,7 @@ function Floor({orders,setOrders,storage,setStorage,registerOnsiteMake}:{orders:
         {openOrders.length===0 && <Empty>ここにカードが表示されます</Empty>}
       </KanbanColumn>
       <KanbanColumn title="保管（在庫）" icon={<Warehouse className="h-4 w-4"/>}>
-        {storageAgg.map(sa=> <StorageCardView key={sa.lotId} agg={sa} onUse={(qty,leftoverQty,location)=>{setStorage(p=>[...p,{lotId:sa.lotId,factoryCode:factory,flavorId:sa.flavorId,location,grams:-qty,manufacturedAt:sa.manufacturedAt}]);if(leftoverQty>0)setStorage(p=>[...p,{lotId:sa.lotId,factoryCode:factory,flavorId:sa.flavorId,location,grams:leftoverQty,manufacturedAt:sa.manufacturedAt}]);}} onWaste={(qtyOrText,reason,location)=>{if(typeof qtyOrText==='number'){setStorage(p=>[...p,{lotId:sa.lotId,factoryCode:factory,flavorId:sa.flavorId,location,grams:-Math.abs(qtyOrText),manufacturedAt:sa.manufacturedAt}]);}}}/>) }
+        {storageAgg.map(sa=> <StorageCardView key={sa.lotId} agg={sa} onUse={(qty,leftoverQty,location)=>{setStorage(p=>[...p,{lotId:sa.lotId,factoryCode:factory,flavorId:sa.flavorId,location,grams:-qty,manufacturedAt:sa.manufacturedAt}]);if(leftoverQty>0)setStorage(p=>[...p,{lotId:sa.lotId,factoryCode:factory,flavorId:sa.flavorId,location,grams:leftoverQty,manufacturedAt:sa.manufacturedAt}]);}} onWaste={(qty,reason,location)=>{if(qty>0){setStorage(p=>[...p,{lotId:sa.lotId,factoryCode:factory,flavorId:sa.flavorId,location,grams:-Math.abs(qty),manufacturedAt:sa.manufacturedAt}]);}}}/>) }
         {storageAgg.length===0 && <Empty>余剰の在庫はここに集計されます</Empty>}
       </KanbanColumn>
     </div>
@@ -186,7 +186,7 @@ function OnsiteMakeDialog({open,onClose,defaultFlavorId,factoryCode,onRegister}:
   </DialogContent></Dialog>);
 }
 
-function StorageCardView({agg,onUse,onWaste}:{agg:{lotId:string;grams:number;locations:Set<string>;flavorId:string;manufacturedAt:string},onUse:(usedQty:number,leftover:number,location:string)=>void,onWaste:(qtyOrText:number|string,reason:'expiry'|'mistake'|'other',location:string)=>void}){
+function StorageCardView({agg,onUse,onWaste}:{agg:{lotId:string;grams:number;locations:Set<string>;flavorId:string;manufacturedAt:string},onUse:(usedQty:number,leftover:number,location:string)=>void,onWaste:(qty:number,reason:'expiry'|'mistake'|'other',location:string,note?:string)=>void}){
   const [useOpen,setUseOpen]=useState(false); const [wasteOpen,setWasteOpen]=useState(false);
   const [useQty,setUseQty]=useState(0); const [useOutcome,setUseOutcome]=useState<'extra'|'none'|'shortage'|''>(''); const [leftQty,setLeftQty]=useState(0); const [loc,setLoc]=useState<string>(Array.from(agg.locations)[0]||"");
   const [wasteReason,setWasteReason]=useState<'expiry'|'mistake'|'other'|''>(''); const [wasteQty,setWasteQty]=useState(0); const [wasteText,setWasteText]=useState("");
@@ -208,7 +208,7 @@ function StorageCardView({agg,onUse,onWaste}:{agg:{lotId:string;grams:number;loc
       {(wasteReason==='expiry'||wasteReason==='mistake'||wasteReason==='other') && (<div className="grid grid-cols-2 gap-3"><div><Label>廃棄量（g）</Label><Input type="number" value={wasteQty} onChange={e=>setWasteQty(parseInt(e.target.value||'0'))}/></div><div><Label>保管場所</Label><Select value={loc} onValueChange={setLoc}><SelectTrigger><SelectValue placeholder="選択"/></SelectTrigger><SelectContent>{Array.from(agg.locations).map(l=> <SelectItem key={l} value={l}>{l}</SelectItem>)}</SelectContent></Select></div></div>)}
       {wasteReason==='other' && (<div><Label>理由（自由記述・任意）</Label><Input value={wasteText} onChange={(e)=>setWasteText(e.target.value)} placeholder="例）サンプル提供など"/></div>)}
     </div>
-    <DialogFooter><Button variant="secondary" onClick={()=>setWasteOpen(false)}>キャンセル</Button><Button disabled={wasteReason===''||wasteQty<=0||!loc} onClick={()=>{onWaste(wasteQty,wasteReason as any,loc);setWasteOpen(false);}}>登録</Button></DialogFooter>
+    <DialogFooter><Button variant="secondary" onClick={()=>setWasteOpen(false)}>キャンセル</Button><Button disabled={wasteReason===''||!loc|| (wasteReason!=='other'&&wasteQty<=0)} onClick={()=>{onWaste(wasteReason==='other'?0:wasteQty,wasteReason as any,loc,wasteReason==='other'?wasteText.trim()||undefined:undefined);setWasteOpen(false);}}>登録</Button></DialogFooter>
   </DialogContent></Dialog>
   </Card>);
 }
