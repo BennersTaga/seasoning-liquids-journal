@@ -14,7 +14,7 @@ import { Plus, Package, Warehouse, Archive, Beaker, Factory, Trash2, Boxes, Chef
 import { format } from "date-fns";
 import { mutate } from "swr";
 
-import { apiPost } from "@/lib/gas";
+import { postAction, postOnsiteMake, postOrdersCreate } from "@/lib/gas";
 import { useMasters } from "@/hooks/useMasters";
 import { useOrders } from "@/hooks/useOrders";
 import { useStorageAgg } from "@/hooks/useStorageAgg";
@@ -247,7 +247,7 @@ export default function App() {
             : null,
       };
       try {
-        await apiPost("onsite-make", payload);
+        await postOnsiteMake(payload);
         await Promise.all([
           mutate(["orders", factoryCode, false]),
           mutate(["storage-agg", factoryCode]),
@@ -405,7 +405,7 @@ function Office({
     };
     try {
       setSubmitting(true);
-      await apiPost("orders-create", body);
+      await postOrdersCreate(body);
       seqRef.current[key] = seq + 1;
       await mutate(["orders", factory, false]);
     } catch (error) {
@@ -664,7 +664,7 @@ function Floor({
     async (order: OrderCard, values: KeepFormValues) => {
       const line = order.lines[0];
       try {
-        await apiPost("action", {
+        await postAction({
           type: "KEEP",
           factory_code: order.factoryCode,
           lot_id: order.lotId,
@@ -695,7 +695,7 @@ function Floor({
         ? { location: report.leftover.location, grams: report.leftover.grams }
         : null;
       try {
-        await apiPost("action", {
+        await postAction({
           type: "MADE_SPLIT",
           factory_code: order.factoryCode,
           lot_id: order.lotId,
@@ -1560,7 +1560,7 @@ function StorageCardView({
     if (!location || useQty <= 0) return;
     try {
       setUseLoading(true);
-      await apiPost("action", {
+      await postAction({
         type: "USE",
         factory_code: factoryCode,
         lot_id: agg.lotId,
@@ -1591,7 +1591,7 @@ function StorageCardView({
     if (wasteReason === "" || (wasteReason !== "other" && wasteQty <= 0)) return;
     try {
       setWasteLoading(true);
-      await apiPost("action", {
+      await postAction({
         type: "WASTE",
         factory_code: factoryCode,
         lot_id: agg.lotId,

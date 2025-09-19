@@ -1,3 +1,10 @@
+import type {
+  ActionBody,
+  Masters,
+  OnsiteMakeBody,
+  OrderCreateBody,
+} from "./sheets/types";
+
 function parseJson<T>(text: string): T {
   try {
     return text ? (JSON.parse(text) as T) : (undefined as T);
@@ -54,3 +61,13 @@ export async function apiPost<T = unknown>(path: string, body: unknown): Promise
     throw error;
   }
 }
+
+export const getMasters = () => apiGet<Masters>("masters");
+
+export const postOrdersCreate = (body: OrderCreateBody) =>
+  apiPost("orders-create", body);
+
+export const postAction = (body: ActionBody) => apiPost("action", body);
+
+export const postOnsiteMake = (body: OnsiteMakeBody) =>
+  apiPost("onsite-make", body);
