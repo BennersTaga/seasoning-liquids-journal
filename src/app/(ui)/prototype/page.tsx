@@ -397,7 +397,8 @@ function Office({
             oem_partner: oemPartner,
             oem_grams: oemGrams,
           };
-    const body = {
+    const payload = {
+      path: "orders-create" as const,
       factory_code: factory,
       lot_id: lotId,
       ordered_at: orderedAt,
@@ -405,7 +406,7 @@ function Office({
     };
     try {
       setSubmitting(true);
-      await apiPost("orders-create", body);
+      await apiPost("action", payload);
       seqRef.current[key] = seq + 1;
       await mutate(["orders", factory, false]);
     } catch (error) {
