@@ -16,7 +16,7 @@ async function postJSON<T>(body: ActionBody): Promise<T> {
     headers: { 'Content-Type':'application/json', 'x-api-key': KEY },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`POST ${body?.path} failed: ${res.status}`);
+  if (!res.ok) throw new Error(`POST action failed: ${res.status}`);
   return res.json();
 }
 

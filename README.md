@@ -29,8 +29,8 @@ The application reads master/order/storage data from Google Sheets via a Google 
 
 | Variable | Description |
 | --- | --- |
-| `GAS_BASE_URL` | Base URL of the Google Apps Script deployment that fronts Google Sheets. The Next.js API route proxies all requests to this endpoint. |
-| `GAS_API_KEY` | API key stored in the GAS Script Properties. It is appended by the server bridge when forwarding requests. |
+| `GAS_BASE_URL` | Base URL of the Google Apps Script deployment that fronts Google Sheets. Paste the full `https://script.googleusercontent.com/...` URL that includes the `user_content_key` and `lib` query parameters. |
+| `GAS_API_KEY` | API key stored in the GAS Script Properties. The server bridge appends this to every request sent to GAS. |
 
 > Never commit a real `.env.local` file to the repository; use `.env.example` / `.env.local.example` as a reference.
 
@@ -47,7 +47,9 @@ UI primitives (button, dialog, card, etc.) live in `src/components/ui` and are p
 ## Deployment on Vercel
 
 1. Create a new project in Vercel and connect it to the GitHub repository that hosts this code.
-2. Set `GAS_BASE_URL` and `GAS_API_KEY` inside the Vercel project settings.
+2. Configure the required environment variables under **Settings → Environment Variables**:
+   - `GAS_BASE_URL`: paste the exact Google Apps Script Web App URL (the long `googleusercontent.com` link with `?user_content_key=...&lib=...`).
+   - `GAS_API_KEY`: copy the key from the Google Apps Script **Script Properties** so that the proxy can authenticate requests.
 3. Vercel will run `npm run build` (configured in `vercel.json`) to produce the production build.
 
 ## Next steps checklist
