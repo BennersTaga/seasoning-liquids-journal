@@ -1,15 +1,19 @@
 export type UseType = 'fissule' | 'oem';
 
-export interface Factory { code: string; name: string }
-export interface Location { factory_code: string; location_name: string }
-export interface Flavor { id: string; flavorName: string; liquidName: string; packToGram: number; expiryDays: number }
 export interface RecipeRow { flavor_id: string; row_no: number; ingredient_name: string; qty: number; unit: string }
 export interface Masters {
-  factories: Factory[];
-  locations: Location[];
-  flavors: Flavor[];
+  factories: { factory_code: string; factory_name: string }[];
+  locations: { factory_code: string; location_name: string }[];
+  flavors: {
+    flavor_id: string;
+    flavor_name: string;
+    liquid_name: string;
+    pack_to_gram: number;
+    expiry_days: number;
+    barcode_code?: string;
+  }[];
   recipes: RecipeRow[];
-  oems: string[];
+  oem_partners: { partner_name: string }[];
 }
 
 export interface OrderRow {

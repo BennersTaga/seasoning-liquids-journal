@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check:gas": "node -e \"fetch('http://localhost:3000/api/gas/masters').then(r=>r.status).then(s=>{if(s!==200)process.exit(1)})\""
   },
   "dependencies": {
     "@radix-ui/react-checkbox": "^1.3.3",
