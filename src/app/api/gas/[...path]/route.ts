@@ -1,46 +1,36 @@
-// src/app/api/gas/[...path]/route.ts
-// Next.js App Router route handler that proxies Google Apps Script.
-// Uses server-only env vars: GAS_BASE_URL and GAS_API_KEY.
+import { NextRequest, NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 
-function must<T>(v: T | undefined, name: string): T {
-  if (!v) throw new Error(`Missing env: ${name}`);
-  return v;
-}
+const BASE = process.env.GAS_BASE_URL!;
+const KEY = process.env.GAS_API_KEY!;
 
-// GET /api/gas/<path>?...   →  GET <GAS_BASE_URL>?path=<path>&key=<GAS_API_KEY>&...
-export async function GET(req: Request, ctx: { params: { path?: string[] } }) {
-  const base = must(process.env.GAS_BASE_URL, 'GAS_BASE_URL');
-  const key  = must(process.env.GAS_API_KEY,  'GAS_API_KEY');
+export async function GET(req: NextRequest, ctx: { params: { path: string[] } }) {
+  const path = ctx.params.path.join('/');
+  const url = new URL(req.url);
+  url.searchParams.delete('key');
+  const qs = url.searchParams.toString();
 
-  const path = (ctx.params.path?.join('/') || '').trim();      // e.g. 'ping', 'masters'
-  const url  = new URL(req.url);
-  url.searchParams.delete('key');                               // ignore any client-provided key
-  const qs   = url.searchParams.toString();
-
-  const target = `${base}?path=${encodeURIComponent(path)}${qs ? `&${qs}` : ''}&key=${encodeURIComponent(key)}`;
+  const target = `${BASE}?path=${encodeURIComponent(path)}${qs ? `&${qs}` : ''}&key=${encodeURIComponent(KEY)}`;
   const r = await fetch(target, { cache: 'no-store' });
+  const text = await r.text();
 
-  return new Response(await r.text(), {
+  return new NextResponse(text, {
     status: r.status,
     headers: { 'content-type': 'application/json' },
   });
 }
 
-// POST /api/gas/<anything>  →  POST <GAS_BASE_URL>?key=<GAS_API_KEY>
-export async function POST(req: Request) {
-  const base = must(process.env.GAS_BASE_URL, 'GAS_BASE_URL');
-  const key  = must(process.env.GAS_API_KEY,  'GAS_API_KEY');
-
+export async function POST(req: NextRequest) {
   const body = await req.text();
-  const r = await fetch(`${base}?key=${encodeURIComponent(key)}`, {
+  const r = await fetch(`${BASE}?key=${encodeURIComponent(KEY)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body,
   });
+  const text = await r.text();
 
-  return new Response(await r.text(), {
+  return new NextResponse(text, {
     status: r.status,
     headers: { 'content-type': 'application/json' },
   });
