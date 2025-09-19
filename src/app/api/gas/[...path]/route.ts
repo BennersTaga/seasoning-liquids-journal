@@ -1,132 +1,47 @@
-import { NextRequest, NextResponse } from "next/server";
+// src/app/api/gas/[...path]/route.ts
+// Next.js App Router route handler that proxies Google Apps Script.
+// Uses server-only env vars: GAS_BASE_URL and GAS_API_KEY.
 
-const GAS_BASE_URL = process.env.GAS_BASE_URL;
-const GAS_API_KEY = process.env.GAS_API_KEY;
+export const dynamic = 'force-dynamic';
 
-type Params = { params: { path?: string[] } };
-
-function ensureEnv(value: string | undefined, key: string) {
-  if (!value) {
-    throw new Error(`${key} is not configured`);
-  }
-  return value;
+function must<T>(v: T | undefined, name: string): T {
+  if (!v) throw new Error(`Missing env: ${name}`);
+  return v;
 }
 
-function buildGasUrl(path: string, searchParams?: URLSearchParams) {
-  const base = ensureEnv(GAS_BASE_URL, "GAS_BASE_URL");
-  const key = ensureEnv(GAS_API_KEY, "GAS_API_KEY");
+// GET /api/gas/<path>?...   →  GET <GAS_BASE_URL>?path=<path>&key=<GAS_API_KEY>&...
+export async function GET(req: Request, ctx: { params: { path?: string[] } }) {
+  const base = must(process.env.GAS_BASE_URL, 'GAS_BASE_URL');
+  const key  = must(process.env.GAS_API_KEY,  'GAS_API_KEY');
 
-  const url = new URL(base);
-  url.searchParams.set("path", path);
-  url.searchParams.set("key", key);
+  const path = (ctx.params.path?.join('/') || '').trim();      // e.g. 'ping', 'masters'
+  const url  = new URL(req.url);
+  url.searchParams.delete('key');                               // ignore any client-provided key
+  const qs   = url.searchParams.toString();
 
-  if (searchParams) {
-    searchParams.forEach((value, paramKey) => {
-      if (paramKey === "path" || paramKey === "key") return;
-      url.searchParams.append(paramKey, value);
-    });
-  }
+  const target = `${base}?path=${encodeURIComponent(path)}${qs ? `&${qs}` : ''}&key=${encodeURIComponent(key)}`;
+  const r = await fetch(target, { cache: 'no-store' });
 
-  return url;
+  return new Response(await r.text(), {
+    status: r.status,
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
-async function forwardRequest(
-  request: NextRequest,
-  method: "GET" | "POST",
-  path: string,
-) {
-  try {
-    const targetUrl = buildGasUrl(path, request.nextUrl.searchParams);
-    const headers = new Headers();
+// POST /api/gas/<anything>  →  POST <GAS_BASE_URL>?key=<GAS_API_KEY>
+export async function POST(req: Request) {
+  const base = must(process.env.GAS_BASE_URL, 'GAS_BASE_URL');
+  const key  = must(process.env.GAS_API_KEY,  'GAS_API_KEY');
 
-    if (method === "POST") {
-      const contentType = request.headers.get("content-type");
-      if (contentType) {
-        headers.set("content-type", contentType);
-      }
-    }
+  const body = await req.text();
+  const r = await fetch(`${base}?key=${encodeURIComponent(key)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  });
 
-    const init: RequestInit = {
-      method,
-      headers,
-      cache: "no-store",
-    };
-
-    if (method === "POST") {
-      init.body = await request.text();
-    }
-
-    const response = await fetch(targetUrl.toString(), init);
-    const text = await response.text();
-
-    if (!response.ok) {
-      let errorPayload: unknown = text;
-      try {
-        errorPayload = text ? JSON.parse(text) : null;
-      } catch {
-        errorPayload = text || response.statusText;
-      }
-
-      return NextResponse.json(
-        {
-          ok: false,
-          status: response.status,
-          error: errorPayload,
-        },
-        { status: 500 },
-      );
-    }
-
-    if (response.status === 204) {
-      return new NextResponse(null, { status: 204 });
-    }
-
-    let data: unknown = null;
-    if (text) {
-      try {
-        data = JSON.parse(text);
-      } catch {
-        return NextResponse.json(
-          {
-            ok: false,
-            error: "Invalid JSON response from GAS",
-          },
-          { status: 500 },
-        );
-      }
-    }
-
-    return NextResponse.json(data, { status: response.status });
-  } catch (error) {
-    console.error("[GAS] proxy error", error);
-    return NextResponse.json(
-      {
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      },
-      { status: 500 },
-    );
-  }
-}
-
-function extractPath(params: Params["params"]) {
-  const segments = params?.path ?? [];
-  const joined = Array.isArray(segments) ? segments.join("/") : String(segments ?? "");
-  return joined.trim();
-}
-
-export async function GET(request: NextRequest, context: Params) {
-  const path = extractPath(context.params);
-  if (!path) {
-    return NextResponse.json({ ok: false, error: "Missing path" }, { status: 400 });
-  }
-  return forwardRequest(request, "GET", path);
-}
-
-export async function POST(request: NextRequest, context: Params) {
-  const path = extractPath(context.params);
-  if (!path) {
-    return NextResponse.json({ ok: false, error: "Missing path" }, { status: 400 });
-  }
-  return forwardRequest(request, "POST", path);
+  return new Response(await r.text(), {
+    status: r.status,
+    headers: { 'content-type': 'application/json' },
+  });
 }
