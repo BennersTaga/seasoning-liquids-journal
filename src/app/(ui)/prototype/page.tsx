@@ -77,18 +77,33 @@ const defaultFlavor: FlavorWithRecipe = {
   recipe: [],
 };
 
+const selectFallback = (loading: boolean, emptyLabel = "データなし") => (
+  <div className="px-2 py-1 text-sm text-muted-foreground">
+    {loading ? "読み込み中..." : emptyLabel}
+  </div>
+);
+
 const grams = (n: number) => `${n.toLocaleString()} g`;
 const genLotId = (factoryCode: string, seq: number, d = new Date()) =>
   `${factoryCode}-${format(d, "yyyyMMdd")}-${String(seq).padStart(3, "0")}`;
 
 function deriveDataFromMasters(masters?: Masters) {
-  const factories = masters?.factories ?? [];
+  const factories =
+    masters?.factories?.map(factory => ({
+      code: factory.factory_code,
+      name: factory.factory_name,
+    })) ?? [];
 
-  const storageByFactory = factories.reduce<Record<string, string[]>>((acc, factory) => {
-    acc[factory.code] =
-      masters?.locations?.filter(loc => loc.factory_code === factory.code).map(loc => loc.location_name) ?? [];
-    return acc;
-  }, {});
+  const storageByFactory: Record<string, string[]> = {};
+  factories.forEach(factory => {
+    storageByFactory[factory.code] = [];
+  });
+  masters?.locations?.forEach(location => {
+    if (!storageByFactory[location.factory_code]) {
+      storageByFactory[location.factory_code] = [];
+    }
+    storageByFactory[location.factory_code].push(location.location_name);
+  });
 
   const recipeMap =
     masters?.recipes?.reduce<Map<string, FlavorRecipeItem[]>>((map, row) => {
@@ -100,15 +115,15 @@ function deriveDataFromMasters(masters?: Masters) {
 
   const flavors: FlavorWithRecipe[] =
     masters?.flavors?.map(fl => ({
-      id: fl.id,
-      flavorName: fl.flavorName,
-      liquidName: fl.liquidName,
-      packToGram: fl.packToGram,
-      expiryDays: fl.expiryDays,
-      recipe: recipeMap.get(fl.id) ?? [],
+      id: fl.flavor_id,
+      flavorName: fl.flavor_name,
+      liquidName: fl.liquid_name,
+      packToGram: fl.pack_to_gram,
+      expiryDays: fl.expiry_days,
+      recipe: recipeMap.get(fl.flavor_id) ?? [],
     })) ?? [];
 
-  const oemList = masters?.oems ?? [];
+  const oemList = masters?.oem_partners?.map(partner => partner.partner_name) ?? [];
 
   return { factories, storageByFactory, flavors, oemList };
 }
@@ -169,6 +184,7 @@ export default function App() {
   const [tab, setTab] = useState("office");
   const mastersQuery = useMasters();
   const mastersData = mastersQuery.data;
+  const mastersLoading = mastersQuery.isLoading || (!mastersData && !mastersQuery.error);
 
   const { factories, storageByFactory, flavors, oemList } = useMemo(
     () => deriveDataFromMasters(mastersData),
@@ -266,6 +282,7 @@ export default function App() {
             flavors={flavors}
             oemList={oemList}
             findFlavor={findFlavor}
+            mastersLoading={mastersLoading}
           />
         </TabsContent>
         <TabsContent value="floor" className="mt-6">
@@ -277,6 +294,7 @@ export default function App() {
             oemList={oemList}
             calcExpiry={calcExpiry}
             registerOnsiteMake={registerOnsiteMake}
+            mastersLoading={mastersLoading}
           />
         </TabsContent>
       </Tabs>
@@ -290,11 +308,13 @@ function Office({
   flavors,
   oemList,
   findFlavor,
+  mastersLoading,
 }: {
   factories: { code: string; name: string }[];
   flavors: FlavorWithRecipe[];
   oemList: string[];
   findFlavor: (id: string) => FlavorWithRecipe;
+  mastersLoading: boolean;
 }) {
   const [factory, setFactory] = useState(factories[0]?.code ?? "");
   const [flavor, setFlavor] = useState(flavors[0]?.id ?? "");
@@ -304,6 +324,9 @@ function Office({
   const [oemGrams, setOemGrams] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const seqRef = useRef<Record<string, number>>({});
+  const factoryDisabled = mastersLoading || factories.length === 0;
+  const flavorDisabled = mastersLoading || flavors.length === 0;
+  const oemDisabled = mastersLoading || oemList.length === 0;
 
   useEffect(() => {
     if (factories.length && !factories.some(f => f.code === factory)) {
@@ -405,15 +428,17 @@ function Office({
           <div>
             <Label>製造場所</Label>
             <Select value={factory} onValueChange={setFactory}>
-              <SelectTrigger>
-                <SelectValue placeholder="選択" />
+              <SelectTrigger disabled={factoryDisabled}>
+                <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
               </SelectTrigger>
               <SelectContent>
-                {factories.map(f => (
-                  <SelectItem key={f.code} value={f.code}>
-                    {f.name}（{f.code}）
-                  </SelectItem>
-                ))}
+                {factories.length
+                  ? factories.map(f => (
+                      <SelectItem key={f.code} value={f.code}>
+                        {f.name}（{f.code}）
+                      </SelectItem>
+                    ))
+                  : selectFallback(mastersLoading)}
               </SelectContent>
             </Select>
           </div>
@@ -422,15 +447,17 @@ function Office({
               <div>
                 <Label>味付け</Label>
                 <Select value={flavor} onValueChange={setFlavor}>
-                  <SelectTrigger>
-                    <SelectValue />
+                  <SelectTrigger disabled={flavorDisabled}>
+                    <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
                   </SelectTrigger>
                   <SelectContent>
-                    {flavors.map(fl => (
-                      <SelectItem key={fl.id} value={fl.id}>
-                        {fl.flavorName}
-                      </SelectItem>
-                    ))}
+                    {flavors.length
+                      ? flavors.map(fl => (
+                          <SelectItem key={fl.id} value={fl.id}>
+                            {fl.flavorName}
+                          </SelectItem>
+                        ))
+                      : selectFallback(mastersLoading)}
                   </SelectContent>
                 </Select>
               </div>
@@ -463,15 +490,17 @@ function Office({
               <div>
                 <Label>味付け</Label>
                 <Select value={flavor} onValueChange={setFlavor}>
-                  <SelectTrigger>
-                    <SelectValue />
+                  <SelectTrigger disabled={flavorDisabled}>
+                    <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
                   </SelectTrigger>
                   <SelectContent>
-                    {flavors.map(fl => (
-                      <SelectItem key={fl.id} value={fl.id}>
-                        {fl.flavorName}
-                      </SelectItem>
-                    ))}
+                    {flavors.length
+                      ? flavors.map(fl => (
+                          <SelectItem key={fl.id} value={fl.id}>
+                            {fl.flavorName}
+                          </SelectItem>
+                        ))
+                      : selectFallback(mastersLoading)}
                   </SelectContent>
                 </Select>
               </div>
@@ -490,15 +519,17 @@ function Office({
               <div>
                 <Label>OEM先</Label>
                 <Select value={oemPartner} onValueChange={setOemPartner}>
-                  <SelectTrigger>
-                    <SelectValue />
+                  <SelectTrigger disabled={oemDisabled}>
+                    <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
                   </SelectTrigger>
                   <SelectContent>
-                    {oemList.map(x => (
-                      <SelectItem key={x} value={x}>
-                        {x}
-                      </SelectItem>
-                    ))}
+                    {oemList.length
+                      ? oemList.map(x => (
+                          <SelectItem key={x} value={x}>
+                            {x}
+                          </SelectItem>
+                        ))
+                      : selectFallback(mastersLoading)}
                   </SelectContent>
                 </Select>
               </div>
@@ -585,6 +616,7 @@ function Floor({
   oemList,
   calcExpiry,
   registerOnsiteMake,
+  mastersLoading,
 }: {
   factories: { code: string; name: string }[];
   flavors: FlavorWithRecipe[];
@@ -601,9 +633,11 @@ function Floor({
     oemPartner?: string,
     leftover?: { loc: string; grams: number },
   ) => Promise<void>;
+  mastersLoading: boolean;
 }) {
   const [factory, setFactory] = useState(factories[0]?.code ?? "");
   const [extraOpen, setExtraOpen] = useState(false);
+  const factoryDisabled = mastersLoading || factories.length === 0;
 
   useEffect(() => {
     if (!factories.length) {
@@ -692,15 +726,17 @@ function Floor({
       <div className="flex items-center gap-3">
         <Label>製造場所</Label>
         <Select value={factory} onValueChange={setFactory}>
-          <SelectTrigger className="w-56">
-            <SelectValue />
+          <SelectTrigger className="w-56" disabled={factoryDisabled}>
+            <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
           </SelectTrigger>
           <SelectContent>
-            {factories.map(f => (
-              <SelectItem key={f.code} value={f.code}>
-                {f.name}（{f.code}）
-              </SelectItem>
-            ))}
+            {factories.length
+              ? factories.map(f => (
+                  <SelectItem key={f.code} value={f.code}>
+                    {f.name}（{f.code}）
+                  </SelectItem>
+                ))
+              : selectFallback(mastersLoading)}
           </SelectContent>
         </Select>
       </div>
@@ -723,6 +759,7 @@ function Floor({
               onReportMade={report => handleReportMade(order, report)}
               findFlavor={findFlavor}
               storageByFactory={storageByFactory}
+              mastersLoading={mastersLoading}
             />
           ))}
           {openOrders.length === 0 && <Empty>ここにカードが表示されます</Empty>}
@@ -750,6 +787,7 @@ function Floor({
         oemList={oemList}
         findFlavor={findFlavor}
         storageByFactory={storageByFactory}
+        mastersLoading={mastersLoading}
       />
     </div>
   );
@@ -801,6 +839,7 @@ function OrderCardView({
   onReportMade,
   findFlavor,
   storageByFactory,
+  mastersLoading,
 }: {
   order: OrderCard;
   remainingPacks: number;
@@ -808,6 +847,7 @@ function OrderCardView({
   onReportMade: (report: MadeReport) => Promise<void>;
   findFlavor: (id: string) => FlavorWithRecipe;
   storageByFactory: Record<string, string[]>;
+  mastersLoading: boolean;
 }) {
   const [open, setOpen] = useState<null | "keep" | "made" | "skip" | "choice" | "split">(null);
   const line = order.lines[0];
@@ -853,6 +893,7 @@ function OrderCardView({
         factoryCode={order.factoryCode}
         storageByFactory={storageByFactory}
         onSubmit={onKeep}
+        mastersLoading={mastersLoading}
       />
       <MadeDialog2
         open={open === "made"}
@@ -863,6 +904,7 @@ function OrderCardView({
         onReport={onReportMade}
         findFlavor={findFlavor}
         storageByFactory={storageByFactory}
+        mastersLoading={mastersLoading}
       />
       <MadeChoiceDialog
         open={open === "choice"}
@@ -880,6 +922,7 @@ function OrderCardView({
         onReport={onReportMade}
         findFlavor={findFlavor}
         storageByFactory={storageByFactory}
+        mastersLoading={mastersLoading}
       />
       <Dialog open={open === "skip"} onOpenChange={o => { if (!o) reset(); }}>
         <DialogContent>
@@ -936,17 +979,19 @@ function KeepDialog({
   factoryCode,
   storageByFactory,
   onSubmit,
+  mastersLoading,
 }: {
   open: boolean;
   onClose: () => void;
   factoryCode: string;
   storageByFactory: Record<string, string[]>;
   onSubmit: (values: KeepFormValues) => Promise<void>;
+  mastersLoading: boolean;
 }) {
   const [loc, setLoc] = useState("");
   const [gramsValue, setGramsValue] = useState(0);
   const [manufacturedAt, setManufacturedAt] = useState(format(new Date(), "yyyy-MM-dd"));
-  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const locations = storageByFactory[factoryCode] || [];
 
   useEffect(() => {
@@ -960,13 +1005,13 @@ function KeepDialog({
   const handleSubmit = async () => {
     if (!loc || gramsValue <= 0 || !manufacturedAt) return;
     try {
-      setLoading(true);
+      setSubmitting(true);
       await onSubmit({ location: loc, grams: gramsValue, manufacturedAt });
       onClose();
     } catch {
       // keep dialog open
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
@@ -981,15 +1026,17 @@ function KeepDialog({
             <div>
               <Label>保管場所</Label>
               <Select value={loc} onValueChange={setLoc}>
-                <SelectTrigger>
-                  <SelectValue placeholder="選択" />
+                <SelectTrigger disabled={mastersLoading || locations.length === 0}>
+                  <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
                 </SelectTrigger>
                 <SelectContent>
-                  {locations.map(l => (
-                    <SelectItem key={l} value={l}>
-                      {l}
-                    </SelectItem>
-                  ))}
+                  {locations.length
+                    ? locations.map(l => (
+                        <SelectItem key={l} value={l}>
+                          {l}
+                        </SelectItem>
+                      ))
+                    : selectFallback(mastersLoading)}
                 </SelectContent>
               </Select>
             </div>
@@ -1009,7 +1056,7 @@ function KeepDialog({
         </div>
         <DialogFooter>
           <Button variant="secondary" onClick={onClose}>キャンセル</Button>
-          <Button disabled={!loc || gramsValue <= 0 || !manufacturedAt || loading} onClick={handleSubmit}>
+          <Button disabled={!loc || gramsValue <= 0 || !manufacturedAt || submitting} onClick={handleSubmit}>
             登録
           </Button>
         </DialogFooter>
@@ -1027,6 +1074,7 @@ function MadeDialog2({
   onReport,
   findFlavor,
   storageByFactory,
+  mastersLoading,
 }: {
   open: boolean;
   onClose: () => void;
@@ -1036,6 +1084,7 @@ function MadeDialog2({
   onReport: (report: MadeReport) => Promise<void>;
   findFlavor: (id: string) => FlavorWithRecipe;
   storageByFactory: Record<string, string[]>;
+  mastersLoading: boolean;
 }) {
   const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [recipeQty, setRecipeQty] = useState<Record<string, number>>({});
@@ -1048,6 +1097,7 @@ function MadeDialog2({
   const line = order.lines[0];
   const flavor = findFlavor(line.flavorId);
   const showPackInput = line.useType === "fissule" && (line.packs || 0) > 0;
+  const locations = storageByFactory[order.factoryCode] || [];
 
   useEffect(() => {
     if (open) {
@@ -1179,15 +1229,17 @@ function MadeDialog2({
             <div>
               <Label>保管場所</Label>
               <Select value={leftLoc} onValueChange={setLeftLoc}>
-                <SelectTrigger>
-                  <SelectValue placeholder="選択" />
+                <SelectTrigger disabled={mastersLoading || locations.length === 0}>
+                  <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
                 </SelectTrigger>
                 <SelectContent>
-                  {(storageByFactory[order.factoryCode] || []).map(l => (
-                    <SelectItem key={l} value={l}>
-                      {l}
-                    </SelectItem>
-                  ))}
+                  {locations.length
+                    ? locations.map(l => (
+                        <SelectItem key={l} value={l}>
+                          {l}
+                        </SelectItem>
+                      ))
+                    : selectFallback(mastersLoading)}
                 </SelectContent>
               </Select>
             </div>
@@ -1232,6 +1284,7 @@ function OnsiteMakeDialog({
   oemList,
   findFlavor,
   storageByFactory,
+  mastersLoading,
 }: {
   open: boolean;
   onClose: () => void;
@@ -1250,6 +1303,7 @@ function OnsiteMakeDialog({
   oemList: string[];
   findFlavor: (id: string) => FlavorWithRecipe;
   storageByFactory: Record<string, string[]>;
+  mastersLoading: boolean;
 }) {
   const [flavorId, setFlavorId] = useState(defaultFlavorId);
   const [manufacturedAt, setManufacturedAt] = useState(format(new Date(), "yyyy-MM-dd"));
@@ -1263,6 +1317,9 @@ function OnsiteMakeDialog({
   const [submitting, setSubmitting] = useState(false);
   const flavor = findFlavor(flavorId);
   const sum = Object.keys(qty).reduce((acc, key) => acc + (checked[key] ? qty[key] || 0 : 0), 0);
+  const flavorDisabled = mastersLoading || flavors.length === 0;
+  const oemDisabled = mastersLoading || oemList.length === 0;
+  const locations = storageByFactory[factoryCode] || [];
 
   useEffect(() => {
     setChecked({});
@@ -1312,15 +1369,17 @@ function OnsiteMakeDialog({
           <div className="md:col-span-1">
             <Label>レシピ</Label>
             <Select value={flavorId} onValueChange={setFlavorId}>
-              <SelectTrigger>
-                <SelectValue />
+              <SelectTrigger disabled={flavorDisabled}>
+                <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
               </SelectTrigger>
               <SelectContent>
-                {flavors.map(fl => (
-                  <SelectItem key={fl.id} value={fl.id}>
-                    {fl.flavorName}
-                  </SelectItem>
-                ))}
+                {flavors.length
+                  ? flavors.map(fl => (
+                      <SelectItem key={fl.id} value={fl.id}>
+                        {fl.flavorName}
+                      </SelectItem>
+                    ))
+                  : selectFallback(mastersLoading)}
               </SelectContent>
             </Select>
           </div>
@@ -1345,15 +1404,17 @@ function OnsiteMakeDialog({
           <div>
             <Label>OEM先</Label>
             <Select value={oemPartner} onValueChange={setOemPartner}>
-              <SelectTrigger>
-                <SelectValue />
+              <SelectTrigger disabled={oemDisabled}>
+                <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
               </SelectTrigger>
               <SelectContent>
-                {oemList.map(x => (
-                  <SelectItem key={x} value={x}>
-                    {x}
-                  </SelectItem>
-                ))}
+                {oemList.length
+                  ? oemList.map(x => (
+                      <SelectItem key={x} value={x}>
+                        {x}
+                      </SelectItem>
+                    ))
+                  : selectFallback(mastersLoading)}
               </SelectContent>
             </Select>
           </div>
@@ -1403,15 +1464,17 @@ function OnsiteMakeDialog({
               <div>
                 <Label>保管場所</Label>
                 <Select value={leftLoc} onValueChange={setLeftLoc}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="選択" />
+                  <SelectTrigger disabled={mastersLoading || locations.length === 0}>
+                    <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
                   </SelectTrigger>
                   <SelectContent>
-                    {(storageByFactory[factoryCode] || []).map(l => (
-                      <SelectItem key={l} value={l}>
-                        {l}
-                      </SelectItem>
-                    ))}
+                    {locations.length
+                      ? locations.map(l => (
+                          <SelectItem key={l} value={l}>
+                            {l}
+                          </SelectItem>
+                        ))
+                      : selectFallback(mastersLoading)}
                   </SelectContent>
                 </Select>
               </div>

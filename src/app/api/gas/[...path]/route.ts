@@ -1,73 +1,46 @@
-import { NextRequest, NextResponse } from "next/server";
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-const BASE = process.env.NEXT_PUBLIC_GAS_API_BASE!;
+const BASE = process.env.GAS_BASE_URL!;
 const KEY = process.env.GAS_API_KEY!;
 
-function ensureEnv() {
-  if (!BASE || !KEY) {
-    return NextResponse.json(
-      { error: "Missing GAS env (BASE or KEY)" },
-      { status: 500 },
-    );
-  }
-  return null;
+function toJSONResponse(r: Response, body: string) {
+  return new Response(body, {
+    status: r.status,
+    headers: { "content-type": "application/json" },
+  });
 }
 
-export async function GET(req: NextRequest, context: unknown) {
-  const missing = ensureEnv();
-  if (missing) return missing;
-
-  const ctx = context as { params?: Record<string, string | string[]> };
-  const raw = ctx.params?.path;
-  const segments = Array.isArray(raw) ? raw : raw ? [raw] : [];
-  const path = segments.join("/");
-
-  try {
-    const search = new URLSearchParams(req.nextUrl.searchParams);
-    search.set("path", path);
-    search.set("key", KEY);
-
-    const response = await fetch(`${BASE}?${search.toString()}`, { cache: "no-store" });
-    const text = await response.text();
-    return new NextResponse(text, {
-      status: response.status,
-      headers: { "content-type": "application/json" },
-    });
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    return NextResponse.json({ error: "Upstream error", detail: message }, { status: 502 });
-  }
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function GET(req: Request, context: any) {
+  const pathParam = context?.params?.path;
+  const seg = Array.isArray(pathParam)
+    ? pathParam.join("/")
+    : typeof pathParam === "string"
+      ? pathParam
+      : "";
+  const url = new URL(req.url);
+  url.searchParams.delete("key");
+  const qs = url.searchParams.toString();
+  const target = `${BASE}?path=${encodeURIComponent(seg)}${qs ? `&${qs}` : ""}&key=${encodeURIComponent(KEY)}`;
+  const r = await fetch(target, { cache: "no-store" });
+  return toJSONResponse(r, await r.text());
 }
 
-export async function POST(req: NextRequest, context: unknown) {
-  const missing = ensureEnv();
-  if (missing) return missing;
-
-  const ctx = context as { params?: Record<string, string | string[]> };
-  const raw = ctx.params?.path;
-  const segments = Array.isArray(raw) ? raw : raw ? [raw] : [];
-  const path = segments.join("/");
-
-  try {
-    let body: unknown;
-    try {
-      body = await req.json();
-    } catch {
-      body = {};
-    }
-
-    const response = await fetch(`${BASE}?key=${encodeURIComponent(KEY)}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...(body as Record<string, unknown>), path }),
-    });
-    const text = await response.text();
-    return new NextResponse(text, {
-      status: response.status,
-      headers: { "content-type": "application/json" },
-    });
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    return NextResponse.json({ error: "Upstream error", detail: message }, { status: 502 });
-  }
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function POST(req: Request, context: any) {
+  const pathParam = context?.params?.path;
+  const seg = Array.isArray(pathParam)
+    ? pathParam.join("/")
+    : typeof pathParam === "string"
+      ? pathParam
+      : "";
+  const body = await req.text();
+  const target = `${BASE}?path=${encodeURIComponent(seg)}&key=${encodeURIComponent(KEY)}`;
+  const r = await fetch(target, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body,
+  });
+  return toJSONResponse(r, await r.text());
 }

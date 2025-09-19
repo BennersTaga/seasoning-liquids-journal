@@ -25,19 +25,18 @@ npm install
 
 ## Environment variables
 
-The front-end talks to Google Sheets via a Google Apps Script Web App.
+The application reads master/order/storage data from Google Sheets via a Google Apps Script Web App that is accessed **only** through the Next.js server.
 
 | Variable | Description |
 | --- | --- |
-| `NEXT_PUBLIC_USE_SHEETS` | Feature flag. Set to `1` to read/write via the Sheets Apps Script backend, otherwise the demo uses in-memory data. |
-| `NEXT_PUBLIC_SHEETS_API_BASE_URL` | Base URL of the Apps Script deployment that fronts Google Sheets. |
-| `NEXT_PUBLIC_SHEETS_API_KEY` | API key header (`x-api-key`) for the Apps Script gateway. |
+| `GAS_BASE_URL` | Base URL of the Google Apps Script deployment that fronts Google Sheets. The Next.js API route proxies all requests to this endpoint. |
+| `GAS_API_KEY` | API key stored in the GAS Script Properties. It is appended by the server bridge when forwarding requests. |
 
-> Never commit a real `.env.local` file to the repository; use `.env.local.example` as a reference.
+> Never commit a real `.env.local` file to the repository; use `.env.example` / `.env.local.example` as a reference.
 
-## Backend (Sheets API)
+## Backend (GAS bridge)
 
-The optional Sheets-backed mode fetches masters, orders, and storage data from your Google Apps Script deployment while logging actions (保管, 使用, 廃棄, 分割). Enable it by setting `NEXT_PUBLIC_USE_SHEETS=1` and configuring `NEXT_PUBLIC_SHEETS_API_BASE_URL` + `NEXT_PUBLIC_SHEETS_API_KEY` in both your local `.env.local` and the Vercel project settings.
+The server-side bridge (`/api/gas/*`) proxies GET/POST requests to the configured GAS deployment. Masters, orders, and storage data as well as action logging (保管, 使用, 廃棄, 分割) all flow through this bridge so that credentials never reach the browser.
 
 ## Prototype host
 
@@ -48,7 +47,7 @@ UI primitives (button, dialog, card, etc.) live in `src/components/ui` and are p
 ## Deployment on Vercel
 
 1. Create a new project in Vercel and connect it to the GitHub repository that hosts this code.
-2. Set `NEXT_PUBLIC_USE_SHEETS`, `NEXT_PUBLIC_SHEETS_API_BASE_URL`, and `NEXT_PUBLIC_SHEETS_API_KEY` inside the Vercel project settings.
+2. Set `GAS_BASE_URL` and `GAS_API_KEY` inside the Vercel project settings.
 3. Vercel will run `npm run build` (configured in `vercel.json`) to produce the production build.
 
 ## Next steps checklist
