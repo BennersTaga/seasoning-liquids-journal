@@ -1,46 +1,39 @@
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+// src/app/api/gas/[...path]/route.ts
+import { NextRequest, NextResponse } from 'next/server';
+
+export const dynamic = 'force-dynamic';
 
 const BASE = process.env.GAS_BASE_URL!;
-const KEY = process.env.GAS_API_KEY!;
+const KEY  = process.env.GAS_API_KEY!;
 
-function toJSONResponse(r: Response, body: string) {
-  return new Response(body, {
-    status: r.status,
-    headers: { "content-type": "application/json" },
-  });
-}
+export async function GET(req: NextRequest, context: any) {
+  const segs: string[] = Array.isArray(context?.params?.path) ? context.params.path : [];
+  const path = segs.join('/');
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function GET(req: Request, context: any) {
-  const pathParam = context?.params?.path;
-  const seg = Array.isArray(pathParam)
-    ? pathParam.join("/")
-    : typeof pathParam === "string"
-      ? pathParam
-      : "";
   const url = new URL(req.url);
-  url.searchParams.delete("key");
+  url.searchParams.delete('key'); // フロントからの key は無視
   const qs = url.searchParams.toString();
-  const target = `${BASE}?path=${encodeURIComponent(seg)}${qs ? `&${qs}` : ""}&key=${encodeURIComponent(KEY)}`;
-  const r = await fetch(target, { cache: "no-store" });
-  return toJSONResponse(r, await r.text());
+  const target =
+    `${BASE}?${path ? `path=${encodeURIComponent(path)}&` : ''}` +
+    `${qs ? `${qs}&` : ''}key=${KEY}`;
+
+  const r = await fetch(target, { cache: 'no-store' });
+  const text = await r.text();
+  return new NextResponse(text, {
+    status: r.status,
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function POST(req: Request, context: any) {
-  const pathParam = context?.params?.path;
-  const seg = Array.isArray(pathParam)
-    ? pathParam.join("/")
-    : typeof pathParam === "string"
-      ? pathParam
-      : "";
-  const body = await req.text();
-  const target = `${BASE}?path=${encodeURIComponent(seg)}&key=${encodeURIComponent(KEY)}`;
-  const r = await fetch(target, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body,
+export async function POST(req: NextRequest) {
+  const r = await fetch(`${BASE}?key=${KEY}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: await req.text(),
   });
-  return toJSONResponse(r, await r.text());
+  const text = await r.text();
+  return new NextResponse(text, {
+    status: r.status,
+    headers: { 'content-type': 'application/json' },
+  });
 }
