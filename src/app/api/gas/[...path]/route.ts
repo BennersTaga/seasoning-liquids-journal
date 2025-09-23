@@ -6,8 +6,10 @@ export const dynamic = 'force-dynamic';
 const BASE = process.env.GAS_BASE_URL!;
 const KEY  = process.env.GAS_API_KEY!;
 
-export async function GET(req: NextRequest, context: any) {
-  const segs: string[] = Array.isArray(context?.params?.path) ? context.params.path : [];
+type RouteContext = { params?: { path?: string[] } };
+
+export async function GET(req: NextRequest, context: RouteContext) {
+  const segs: string[] = Array.isArray(context?.params?.path) ? context.params.path ?? [] : [];
   const path = segs.join('/');
 
   const url = new URL(req.url);

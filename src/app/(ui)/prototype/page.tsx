@@ -379,30 +379,30 @@ function Office({
     const seq = seqRef.current[key] ?? 1;
     const lotId = genLotId(factory, seq, today);
     const orderedAt = format(today, "yyyy-MM-dd");
-    const line =
+    const body =
       useType === "fissule"
         ? {
+            factory_code: factory,
+            lot_id: lotId,
+            ordered_at: orderedAt,
             flavor_id: flavor,
             use_type: "fissule" as const,
             packs,
             required_grams: packs * (findFlavor(flavor)?.packToGram ?? 0),
-            oem_partner: null,
-            oem_grams: null,
+            oem_partner: "",
+            archived: false,
           }
         : {
+            factory_code: factory,
+            lot_id: lotId,
+            ordered_at: orderedAt,
             flavor_id: flavor,
             use_type: "oem" as const,
             packs: 0,
             required_grams: oemGrams,
-            oem_partner: oemPartner,
-            oem_grams: oemGrams,
+            oem_partner: oemPartner ?? "",
+            archived: false,
           };
-    const body = {
-      factory_code: factory,
-      lot_id: lotId,
-      ordered_at: orderedAt,
-      lines: [line],
-    };
     try {
       setSubmitting(true);
       await apiPost("orders-create", body);
