@@ -6,8 +6,20 @@ export const dynamic = 'force-dynamic';
 const BASE = process.env.GAS_BASE_URL!;
 const KEY  = process.env.GAS_API_KEY!;
 
-export async function GET(req: NextRequest, context: any) {
-  const segs: string[] = Array.isArray(context?.params?.path) ? context.params.path : [];
+type RouteParams = Record<string, string | string[] | undefined>;
+
+function readSegments(params?: RouteParams): string[] {
+  const segs = params?.path;
+  if (Array.isArray(segs)) return segs;
+  if (typeof segs === 'string') return [segs];
+  return [];
+}
+
+export async function GET(
+  req: NextRequest,
+  { params }: { params: Promise<RouteParams> }
+) {
+  const segs = readSegments(await params);
   const path = segs.join('/');
 
   const url = new URL(req.url);
@@ -25,11 +37,31 @@ export async function GET(req: NextRequest, context: any) {
   });
 }
 
-export async function POST(req: NextRequest) {
+export async function POST(
+  req: NextRequest,
+  { params }: { params: Promise<RouteParams> }
+) {
+  const segs = readSegments(await params);
+  const path = segs.join('/');
+  const raw = await req.text();
+  let orig: unknown = {};
+  if (raw) {
+    try {
+      orig = JSON.parse(raw);
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 });
+    }
+  }
+
+  const merged = JSON.stringify({
+    path,
+    ...(orig && typeof orig === 'object' && !Array.isArray(orig) ? orig : {}),
+  });
+
   const r = await fetch(`${BASE}?key=${KEY}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: await req.text(),
+    body: merged,
   });
   const text = await r.text();
   return new NextResponse(text, {

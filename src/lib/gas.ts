@@ -39,7 +39,7 @@ export async function apiPost<T = unknown>(path: string, body: unknown): Promise
     const res = await fetch(`/api/gas/${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ path, ...(body as Record<string, unknown>) }),
     });
     const text = await res.text();
     if (!res.ok) {
