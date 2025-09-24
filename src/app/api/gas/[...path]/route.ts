@@ -6,20 +6,43 @@ export const dynamic = 'force-dynamic';
 const BASE = process.env.GAS_BASE_URL!;
 const KEY  = process.env.GAS_API_KEY!;
 
-type RouteContext = {
-  params: Promise<Record<string, string | string[] | undefined>>;
-};
+type ParamsValue =
+  | { path?: string | string[] }
+  | Record<string, string | string[] | undefined>
+  | undefined;
 
-async function readSegments(context: RouteContext): Promise<string[]> {
-  const params = ((await context.params) ?? {}) as Record<string, string | string[] | undefined>;
-  const segs = params.path;
-  if (Array.isArray(segs)) return segs;
-  if (typeof segs === 'string') return [segs];
+type ParamsSource = ParamsValue | Promise<Record<string, string | string[] | undefined>>;
+
+function isPromise<T>(value: unknown): value is PromiseLike<T> {
+  return !!value && typeof value === 'object' && 'then' in value && typeof (value as { then: unknown }).then === 'function';
+}
+
+async function readSegments(params: ParamsSource | undefined): Promise<string[]> {
+  if (isPromise<Record<string, string | string[] | undefined>>(params)) {
+    return readSegments(await params);
+  }
+  const raw = (params as ParamsValue)?.path;
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') return [raw];
   return [];
 }
 
-export async function GET(req: NextRequest, context: RouteContext) {
-  const segs = await readSegments(context);
+type PromiseContext = { params: Promise<Record<string, string | string[] | undefined>> };
+type HandlerContext = { params: { path?: string[] } } | PromiseContext;
+
+export async function GET(
+  req: NextRequest,
+  { params }: { params: { path?: string[] } }
+): Promise<NextResponse>;
+export async function GET(
+  req: NextRequest,
+  { params }: PromiseContext
+): Promise<NextResponse>;
+export async function GET(
+  req: NextRequest,
+  { params }: HandlerContext
+): Promise<NextResponse> {
+  const segs = await readSegments(params);
   const path = segs.join('/');
 
   const url = new URL(req.url);
@@ -37,21 +60,25 @@ export async function GET(req: NextRequest, context: RouteContext) {
   });
 }
 
-export async function POST(req: NextRequest, context: RouteContext) {
-  const segs = await readSegments(context);
+export async function POST(
+  req: NextRequest,
+  { params }: { params: { path?: string[] } }
+): Promise<NextResponse>;
+export async function POST(
+  req: NextRequest,
+  { params }: PromiseContext
+): Promise<NextResponse>;
+export async function POST(
+  req: NextRequest,
+  { params }: HandlerContext
+): Promise<NextResponse> {
+  const segs = await readSegments(params);
   const path = segs.join('/');
   const raw = await req.text();
   let orig: unknown = {};
   if (raw) {
-    try {
-      orig = JSON.parse(raw);
-    } catch (error) {
-      console.error('[GAS] Failed to parse POST body as JSON', error);
-      return NextResponse.json(
-        { error: 'Invalid JSON payload' },
-        { status: 400 },
-      );
-    }
+    try { orig = JSON.parse(raw); }
+    catch { return NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 }); }
   }
 
   const merged = JSON.stringify({
