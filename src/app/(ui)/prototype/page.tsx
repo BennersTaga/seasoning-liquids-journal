@@ -405,12 +405,19 @@ function Office({
           };
     try {
       setSubmitting(true);
-      await apiPost("orders-create", body);
+      const resp = await apiPost<{ ok?: boolean }>("orders-create", body);
+      if (!resp?.ok) {
+        throw new Error(JSON.stringify(resp));
+      }
       seqRef.current[key] = seq + 1;
       await mutate(["orders", factory, false]);
     } catch (error) {
       console.error(error);
-      alert("通信に失敗しました");
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : "通信に失敗しました";
+      alert(message);
     } finally {
       setSubmitting(false);
     }
