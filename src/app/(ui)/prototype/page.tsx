@@ -34,6 +34,7 @@ interface FlavorWithRecipe {
 interface OrderLine {
   flavorId: string;
   packs: number;
+  packsRemaining?: number;
   requiredGrams: number;
   useType: "fissule" | "oem";
   oemPartner?: string;
@@ -137,6 +138,7 @@ function normalizeOrders(rows?: OrderRow[]): OrderCard[] {
         ? {
             flavorId: row.flavor_id,
             packs: row.packs,
+            packsRemaining: row.packs_remaining ?? undefined,
             requiredGrams: row.required_grams,
             useType: "fissule",
           }
@@ -349,6 +351,21 @@ function Office({
   const ordersQuery = useOrders(factory || undefined, false);
   const orderCards = useMemo(() => normalizeOrders(ordersQuery.data), [ordersQuery.data]);
   const openOrders = useMemo(() => orderCards.filter(order => !order.archived), [orderCards]);
+  const storageAggQuery = useStorageAgg(factory || undefined);
+  const storageAgg = useMemo(() => normalizeStorage(storageAggQuery.data), [storageAggQuery.data]);
+
+  const calcExpiry = useCallback(
+    (manufacturedAt: string, flavorId: string) => {
+      const flavor = findFlavor(flavorId);
+      const days = flavor?.expiryDays ?? 0;
+      if (!manufacturedAt) return "-";
+      const d = new Date(manufacturedAt);
+      if (Number.isNaN(d.getTime())) return "-";
+      d.setDate(d.getDate() + days);
+      return format(d, "yyyy-MM-dd");
+    },
+    [findFlavor],
+  );
 
   useEffect(() => {
     const next = { ...seqRef.current };
@@ -424,7 +441,7 @@ function Office({
   }, [factory, flavor, useType, packs, oemPartner, oemGrams, findFlavor]);
 
   return (
-    <div className="grid md:grid-cols-2 gap-6">
+    <div className="grid md:grid-cols-3 gap-6 items-start">
       <Card className="shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -562,10 +579,23 @@ function Office({
         </CardContent>
       </Card>
 
+      <KanbanColumn title="保管（在庫）" icon={<Warehouse className="h-4 w-4" />}>
+        {storageAgg.map(agg => (
+          <StorageCardView
+            key={agg.lotId}
+            agg={agg}
+            findFlavor={findFlavor}
+            calcExpiry={calcExpiry}
+            factoryCode={factory}
+          />
+        ))}
+        {storageAgg.length === 0 && <Empty>余剰の在庫はここに集計されます</Empty>}
+      </KanbanColumn>
+
       <Card className="shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Package className="h-5 w-5" />進捗（未アーカイブ）
+            <Package className="h-5 w-5" />製造指示
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 max-h-[540px] overflow-auto pr-2">
@@ -761,7 +791,10 @@ function Floor({
             <OrderCardView
               key={order.orderId}
               order={order}
-              remainingPacks={Math.max(0, order.lines[0]?.packs ?? 0)}
+              remainingPacks={Math.max(
+                0,
+                order.lines[0]?.packsRemaining ?? order.lines[0]?.packs ?? 0,
+              )}
               onKeep={values => handleKeep(order, values)}
               onReportMade={report => handleReportMade(order, report)}
               findFlavor={findFlavor}
