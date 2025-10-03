@@ -349,6 +349,21 @@ function Office({
   const ordersQuery = useOrders(factory || undefined, false);
   const orderCards = useMemo(() => normalizeOrders(ordersQuery.data), [ordersQuery.data]);
   const openOrders = useMemo(() => orderCards.filter(order => !order.archived), [orderCards]);
+  const storageAggQuery = useStorageAgg(factory || undefined);
+  const storageAgg = useMemo(() => normalizeStorage(storageAggQuery.data), [storageAggQuery.data]);
+
+  const calcExpiry = useCallback(
+    (manufacturedAt: string, flavorId: string) => {
+      const flavor = findFlavor(flavorId);
+      const days = flavor?.expiryDays ?? 0;
+      if (!manufacturedAt) return "-";
+      const d = new Date(manufacturedAt);
+      if (Number.isNaN(d.getTime())) return "-";
+      d.setDate(d.getDate() + days);
+      return format(d, "yyyy-MM-dd");
+    },
+    [findFlavor],
+  );
 
   useEffect(() => {
     const next = { ...seqRef.current };
@@ -424,7 +439,7 @@ function Office({
   }, [factory, flavor, useType, packs, oemPartner, oemGrams, findFlavor]);
 
   return (
-    <div className="grid md:grid-cols-2 gap-6">
+    <div className="grid md:grid-cols-3 gap-6 items-start">
       <Card className="shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -561,6 +576,19 @@ function Office({
           </div>
         </CardContent>
       </Card>
+
+      <KanbanColumn title="保管（在庫）" icon={<Warehouse className="h-4 w-4" />}>
+        {storageAgg.map(agg => (
+          <StorageCardView
+            key={agg.lotId}
+            agg={agg}
+            findFlavor={findFlavor}
+            calcExpiry={calcExpiry}
+            factoryCode={factory}
+          />
+        ))}
+        {storageAgg.length === 0 && <Empty>余剰の在庫はここに集計されます</Empty>}
+      </KanbanColumn>
 
       <Card className="shadow-sm">
         <CardHeader>
