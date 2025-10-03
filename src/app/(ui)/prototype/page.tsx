@@ -565,7 +565,7 @@ function Office({
       <Card className="shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Package className="h-5 w-5" />進捗（未アーカイブ）
+            <Package className="h-5 w-5" />製造指示
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 max-h-[540px] overflow-auto pr-2">
