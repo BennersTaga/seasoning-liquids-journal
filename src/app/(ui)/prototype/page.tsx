@@ -34,6 +34,7 @@ interface FlavorWithRecipe {
 interface OrderLine {
   flavorId: string;
   packs: number;
+  packsRemaining?: number;
   requiredGrams: number;
   useType: "fissule" | "oem";
   oemPartner?: string;
@@ -137,6 +138,7 @@ function normalizeOrders(rows?: OrderRow[]): OrderCard[] {
         ? {
             flavorId: row.flavor_id,
             packs: row.packs,
+            packsRemaining: row.packs_remaining ?? undefined,
             requiredGrams: row.required_grams,
             useType: "fissule",
           }
@@ -789,7 +791,10 @@ function Floor({
             <OrderCardView
               key={order.orderId}
               order={order}
-              remainingPacks={Math.max(0, order.lines[0]?.packs ?? 0)}
+              remainingPacks={Math.max(
+                0,
+                order.lines[0]?.packsRemaining ?? order.lines[0]?.packs ?? 0,
+              )}
               onKeep={values => handleKeep(order, values)}
               onReportMade={report => handleReportMade(order, report)}
               findFlavor={findFlavor}

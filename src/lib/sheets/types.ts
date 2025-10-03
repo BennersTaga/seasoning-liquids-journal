@@ -24,6 +24,8 @@ export interface OrderRow {
   flavor_id: string;
   use_type: UseType;
   packs: number;                // 0 if OEM
+  made_packs?: number;
+  packs_remaining?: number;
   required_grams: number;
   oem_partner?: string | null;
   archived: boolean;
