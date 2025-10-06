@@ -4,6 +4,8 @@ export interface RecipeRow { flavor_id: string; row_no: number; ingredient_name:
 export interface Masters {
   factories: { factory_code: string; factory_name: string }[];
   locations: { factory_code: string; location_name: string }[];
+  uses: { use_code: string; use_name: string; use_type: UseType }[];
+  use_flavors: { use_code: string; flavor_id: string }[];
   flavors: {
     flavor_id: string;
     flavor_name: string;
@@ -23,6 +25,7 @@ export interface OrderRow {
   ordered_at: string;
   flavor_id: string;
   use_type: UseType;
+  use_code?: string;
   packs: number;                // 0 if OEM
   made_packs?: number;
   packs_remaining?: number;
@@ -38,6 +41,7 @@ export interface StorageAggRow {
   grams: number;
   locations: string[];          // aggregated list
   manufactured_at: string;
+  packs_equiv?: number | null;
 }
 
 export interface ActionBody {

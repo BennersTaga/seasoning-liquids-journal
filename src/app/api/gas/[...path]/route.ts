@@ -81,10 +81,8 @@ export async function POST(
     catch { return NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 }); }
   }
 
-  const merged = JSON.stringify({
-    path,
-    ...(orig && typeof orig === 'object' && !Array.isArray(orig) ? orig : {}),
-  });
+  const payload = normalizePostBody(path, orig);
+  const merged = JSON.stringify(payload);
 
   const r = await fetch(`${BASE}?key=${KEY}`, {
     method: 'POST',
@@ -96,4 +94,25 @@ export async function POST(
     status: r.status,
     headers: { 'content-type': 'application/json' },
   });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizePostBody(path: string, orig: unknown): Record<string, unknown> {
+  const base = isRecord(orig) ? { ...orig } : {};
+  const body: Record<string, unknown> = { path, ...base };
+
+  if (body.path === 'action' && typeof body.type === 'string') {
+    const actionPayload = body.payload;
+    if (body.type === 'WASTE' && isRecord(actionPayload)) {
+      const grams = actionPayload.grams;
+      if (typeof grams === 'number' && !Number.isNaN(grams) && !('qty' in actionPayload)) {
+        body.payload = { ...actionPayload, qty: grams };
+      }
+    }
+  }
+
+  return body;
 }
