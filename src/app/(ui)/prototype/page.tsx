@@ -1648,13 +1648,14 @@ function StorageCardView({
   const handleWaste = async () => {
     const location = effectiveLocation(loc);
     if (!location) return;
-    if (wasteReason === "" || (wasteReason !== "other" && wasteQty <= 0)) return;
+    // 数量は理由に関係なく必須
+    if (wasteReason === "" || wasteQty <= 0) return;
     try {
       setWasteLoading(true);
-      // grams/qty の両方を送る（GAS 側は grams 優先で超過チェック & 記帳）
+      // 「その他」でも数値送信。grams/qty を同値で送る（GAS 側は grams 優先）
       const payload =
         wasteReason === "other"
-          ? { reason: "other", note: wasteText, location }
+          ? { reason: "other", note: wasteText, grams: wasteQty, qty: wasteQty, location }
           : { reason: wasteReason, grams: wasteQty, qty: wasteQty, location };
 
       const resp = await apiPost<{
@@ -1802,33 +1803,32 @@ function StorageCardView({
                 </SelectContent>
               </Select>
             </div>
-            {(wasteReason === "expiry" || wasteReason === "mistake") && (
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label>廃棄量（g）</Label>
-                  <Input
-                    type="number"
-                    value={wasteQty}
-                    onChange={e => setWasteQty(Number.parseInt(e.target.value || "0", 10))}
-                  />
-                </div>
-                <div>
-                  <Label>保管場所</Label>
-                  <Select value={loc} onValueChange={setLoc}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="選択" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {agg.locations.map(l => (
-                        <SelectItem key={l} value={l}>
-                          {l}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>廃棄量（g）</Label>
+                <Input
+                  type="number"
+                  value={wasteQty}
+                  onChange={e => setWasteQty(Number.parseInt(e.target.value || "0", 10))}
+                />
               </div>
-            )}
+              <div>
+                <Label>保管場所</Label>
+                <Select value={loc} onValueChange={setLoc}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="選択" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {agg.locations.map(l => (
+                      <SelectItem key={l} value={l}>
+                        {l}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
             {wasteReason === "other" && (
               <div>
                 <Label>理由（自由記述）</Label>
@@ -1842,7 +1842,8 @@ function StorageCardView({
               disabled={
                 wasteLoading ||
                 wasteReason === "" ||
-                ((wasteReason === "expiry" || wasteReason === "mistake") && (wasteQty <= 0 || !effectiveLocation(loc))) ||
+                wasteQty <= 0 ||
+                !effectiveLocation(loc) ||
                 (wasteReason === "other" && wasteText.trim() === "")
               }
               onClick={handleWaste}
