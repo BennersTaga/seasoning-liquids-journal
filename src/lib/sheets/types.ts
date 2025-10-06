@@ -38,6 +38,7 @@ export interface StorageAggRow {
   grams: number;
   locations: string[];          // aggregated list
   manufactured_at: string;
+  packs_equiv?: number | null;
 }
 
 export interface ActionBody {
