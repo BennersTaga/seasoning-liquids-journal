@@ -55,6 +55,7 @@ interface StorageAggEntry {
   factoryCode: string;
   flavorId: string;
   grams: number;
+  packsEquiv?: number;
   locations: string[];
   manufacturedAt: string;
 }
@@ -84,7 +85,8 @@ const selectFallback = (loading: boolean, emptyLabel = "データなし") => (
   </div>
 );
 
-const grams = (n: number) => `${n.toLocaleString()} g`;
+const formatNumber = (n: number) => n.toLocaleString();
+const formatGram = (n: number) => `${formatNumber(n)} g`;
 const genLotId = (factoryCode: string, seq: number, d = new Date()) =>
   `${factoryCode}-${format(d, "yyyyMMdd")}-${String(seq).padStart(3, "0")}`;
 
@@ -176,6 +178,7 @@ function normalizeStorage(rows?: StorageAggRow[]): StorageAggEntry[] {
       factoryCode: row.factory_code,
       flavorId: row.flavor_id,
       grams: row.grams,
+      packsEquiv: row.packs_equiv ?? undefined,
       locations: row.locations ?? [],
       manufacturedAt: row.manufactured_at,
     }))
@@ -505,7 +508,7 @@ function Office({
                   onChange={e => setPacks(Number.parseInt(e.target.value || "0", 10))}
                 />
                 <div className="text-xs text-muted-foreground mt-1">
-                  必要量: {grams(packs * (findFlavor(flavor)?.packToGram ?? 0))}
+                  必要量: {formatGram(packs * (findFlavor(flavor)?.packToGram ?? 0))}
                 </div>
               </div>
             </div>
@@ -623,7 +626,7 @@ function Office({
                         {ln.useType === "fissule" ? ln.packs : ln.oemPartner}
                       </Field>
                       <Field label="必要量">
-                        <span className="font-semibold">{grams(ln.requiredGrams)}</span>
+                        <span className="font-semibold">{formatGram(ln.requiredGrams)}</span>
                       </Field>
                     </div>
                   </div>
@@ -917,7 +920,7 @@ function OrderCardView({
               <Field label="パック数">
                 {line.packs}（残り {remainingPacks}）
               </Field>
-              <Field label="必要量">{grams(line.requiredGrams)}</Field>
+              <Field label="必要量">{formatGram(line.requiredGrams)}</Field>
             </div>
           )}
         </div>
@@ -1239,7 +1242,7 @@ function MadeDialog2({
           </div>
         ) : (
           <div className="grid md:grid-cols-3 gap-3 bg-muted/30 rounded-md p-3">
-            {line.useType === "oem" && <Field label="作成量">{grams(line.oemGrams || line.requiredGrams)}</Field>}
+            {line.useType === "oem" && <Field label="作成量">{formatGram(line.oemGrams || line.requiredGrams)}</Field>}
             <Field label="製造日">
               <Input type="date" value={manufacturedAt} onChange={e => setManufacturedAt(e.target.value)} />
             </Field>
@@ -1483,7 +1486,7 @@ function OnsiteMakeDialog({
             </div>
           ))}
           <div className="text-right text-sm">
-            作成量 合計：<span className="font-semibold">{grams(sum)}</span>
+            作成量 合計：<span className="font-semibold">{formatGram(sum)}</span>
           </div>
         </div>
         <div className="grid md:grid-cols-3 gap-3">
@@ -1572,6 +1575,8 @@ function StorageCardView({
   const [wasteText, setWasteText] = useState("");
   const [useLoading, setUseLoading] = useState(false);
   const [wasteLoading, setWasteLoading] = useState(false);
+  const [currentGrams, setCurrentGrams] = useState(agg.grams);
+  const [currentPacksEquiv, setCurrentPacksEquiv] = useState<number | undefined>(agg.packsEquiv);
   const flavor = findFlavor(agg.flavorId);
   const expiry = calcExpiry(agg.manufacturedAt, agg.flavorId);
 
@@ -1593,6 +1598,11 @@ function StorageCardView({
     }
   }, [wasteOpen, agg.locations]);
 
+  useEffect(() => {
+    setCurrentGrams(agg.grams);
+    setCurrentPacksEquiv(agg.packsEquiv);
+  }, [agg.grams, agg.packsEquiv]);
+
   const effectiveLocation = (current: string) => current || agg.locations[0] || "";
 
   const handleUse = async () => {
@@ -1600,26 +1610,36 @@ function StorageCardView({
     if (!location || useQty <= 0) return;
     try {
       setUseLoading(true);
-      await apiPost("action", {
+      const resp = await apiPost<{
+        storage_after?: { grams: number; packs_equiv?: number | null };
+      }>("/exec", {
+        path: "action",
         type: "USE",
         factory_code: factoryCode,
         lot_id: agg.lotId,
         flavor_id: agg.flavorId,
         payload: {
-          qty: useQty,
+          grams: useQty,
           location,
-          result: useOutcome || null,
+          result: useOutcome || "used",
           leftover:
             useOutcome === "extra" && leftQty > 0
               ? { grams: leftQty, location }
               : null,
         },
       });
-      await mutate(["storage-agg", factoryCode]);
+      await Promise.all([
+        mutate(["storage-agg", factoryCode], undefined, { revalidate: true }),
+        mutate(["orders", factoryCode, false], undefined, { revalidate: true }),
+      ]);
+      if (resp?.storage_after) {
+        setCurrentGrams(resp.storage_after.grams);
+        setCurrentPacksEquiv(resp.storage_after.packs_equiv ?? undefined);
+      }
       setUseOpen(false);
     } catch (error) {
       console.error(error);
-      alert("通信に失敗しました");
+      alert(error instanceof Error ? error.message : "通信に失敗しました");
     } finally {
       setUseLoading(false);
     }
@@ -1628,24 +1648,33 @@ function StorageCardView({
   const handleWaste = async () => {
     const location = effectiveLocation(loc);
     if (!location) return;
-    if (wasteReason === "" || (wasteReason !== "other" && wasteQty <= 0)) return;
+    // 数量は理由に関係なく必須
+    if (wasteReason === "" || wasteQty <= 0) return;
     try {
       setWasteLoading(true);
-      await apiPost("action", {
+      const payload =
+        wasteReason === "other"
+          ? { reason: "other", note: wasteText, grams: wasteQty, qty: wasteQty, location }
+          : { reason: wasteReason, grams: wasteQty, qty: wasteQty, location };
+      const resp = await apiPost<{
+        storage_after?: { grams: number; packs_equiv?: number | null };
+      }>("/exec", {
+        path: "action",
         type: "WASTE",
         factory_code: factoryCode,
         lot_id: agg.lotId,
         flavor_id: agg.flavorId,
-        payload:
-          wasteReason === "other"
-            ? { reason: "other", note: wasteText, location }
-            : { reason: wasteReason, qty: wasteQty, location },
+        payload,
       });
-      await mutate(["storage-agg", factoryCode]);
+      await mutate(["storage-agg", factoryCode], undefined, { revalidate: true });
+      if (resp?.storage_after) {
+        setCurrentGrams(resp.storage_after.grams);
+        setCurrentPacksEquiv(resp.storage_after.packs_equiv ?? undefined);
+      }
       setWasteOpen(false);
     } catch (error) {
       console.error(error);
-      alert("通信に失敗しました");
+      alert(error instanceof Error ? error.message : "通信に失敗しました");
     } finally {
       setWasteLoading(false);
     }
@@ -1665,7 +1694,12 @@ function StorageCardView({
           <Field label="製造日">{agg.manufacturedAt || "-"}</Field>
           <Field label="賞味期限">{expiry}</Field>
           <Field label="合計">
-            <span className="font-semibold">{grams(agg.grams)}</span>
+            <span className="font-semibold">{formatGram(currentGrams)}</span>
+            {typeof currentPacksEquiv === "number" && (
+              <span className="ml-1 text-sm text-muted-foreground">
+                （約 {formatNumber(currentPacksEquiv)} パック）
+              </span>
+            )}
           </Field>
         </div>
         <div className="flex gap-2">
@@ -1766,33 +1800,32 @@ function StorageCardView({
                 </SelectContent>
               </Select>
             </div>
-            {(wasteReason === "expiry" || wasteReason === "mistake") && (
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label>廃棄量（g）</Label>
-                  <Input
-                    type="number"
-                    value={wasteQty}
-                    onChange={e => setWasteQty(Number.parseInt(e.target.value || "0", 10))}
-                  />
-                </div>
-                <div>
-                  <Label>保管場所</Label>
-                  <Select value={loc} onValueChange={setLoc}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="選択" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {agg.locations.map(l => (
-                        <SelectItem key={l} value={l}>
-                          {l}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>廃棄量（g）</Label>
+                <Input
+                  type="number"
+                  value={wasteQty}
+                  onChange={e => setWasteQty(Number.parseInt(e.target.value || "0", 10))}
+                />
               </div>
-            )}
+              <div>
+                <Label>保管場所</Label>
+                <Select value={loc} onValueChange={setLoc}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="選択" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {agg.locations.map(l => (
+                      <SelectItem key={l} value={l}>
+                        {l}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
             {wasteReason === "other" && (
               <div>
                 <Label>理由（自由記述）</Label>
@@ -1806,7 +1839,8 @@ function StorageCardView({
               disabled={
                 wasteLoading ||
                 wasteReason === "" ||
-                ((wasteReason === "expiry" || wasteReason === "mistake") && (wasteQty <= 0 || !effectiveLocation(loc))) ||
+                wasteQty <= 0 ||
+                !effectiveLocation(loc) ||
                 (wasteReason === "other" && wasteText.trim() === "")
               }
               onClick={handleWaste}
