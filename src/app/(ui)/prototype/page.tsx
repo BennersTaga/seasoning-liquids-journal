@@ -1651,18 +1651,28 @@ function StorageCardView({
     if (wasteReason === "" || (wasteReason !== "other" && wasteQty <= 0)) return;
     try {
       setWasteLoading(true);
-      await apiPost("/exec", {
+      // grams/qty の両方を送る（GAS 側は grams 優先で超過チェック & 記帳）
+      const payload =
+        wasteReason === "other"
+          ? { reason: "other", note: wasteText, location }
+          : { reason: wasteReason, grams: wasteQty, qty: wasteQty, location };
+
+      const resp = await apiPost<{
+        storage_after?: { grams: number; packs_equiv?: number | null };
+      }>("/exec", {
         path: "action",
         type: "WASTE",
         factory_code: factoryCode,
         lot_id: agg.lotId,
         flavor_id: agg.flavorId,
-        payload:
-          wasteReason === "other"
-            ? { reason: "other", note: wasteText, location }
-            : { reason: wasteReason, grams: wasteQty, location },
+        payload,
       });
+
       await mutate(["storage-agg", factoryCode], undefined, { revalidate: true });
+      if (resp?.storage_after) {
+        setCurrentGrams(resp.storage_after.grams);
+        setCurrentPacksEquiv(resp.storage_after.packs_equiv ?? undefined);
+      }
       setWasteOpen(false);
     } catch (error) {
       console.error(error);
