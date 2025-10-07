@@ -37,6 +37,7 @@ interface OrderLine {
   packsRemaining?: number;
   requiredGrams: number;
   useType: "fissule" | "oem";
+  useCode?: string;
   oemPartner?: string;
   oemGrams?: number;
 }
@@ -128,7 +129,22 @@ function deriveDataFromMasters(masters?: Masters) {
 
   const oemList = masters?.oem_partners?.map(partner => partner.partner_name) ?? [];
 
-  return { factories, storageByFactory, flavors, oemList };
+  const uses =
+    masters?.uses?.map(u => ({
+      code: u.use_code,
+      name: u.use_name,
+      type: u.use_type,
+    })) ?? [];
+
+  const allowedByUse: Record<string, Set<string>> = {};
+  masters?.use_flavors?.forEach(row => {
+    if (!allowedByUse[row.use_code]) {
+      allowedByUse[row.use_code] = new Set();
+    }
+    allowedByUse[row.use_code].add(row.flavor_id);
+  });
+
+  return { factories, storageByFactory, flavors, oemList, uses, allowedByUse };
 }
 
 function normalizeOrders(rows?: OrderRow[]): OrderCard[] {
@@ -143,12 +159,14 @@ function normalizeOrders(rows?: OrderRow[]): OrderCard[] {
             packsRemaining: row.packs_remaining ?? undefined,
             requiredGrams: row.required_grams,
             useType: "fissule",
+            useCode: row.use_code ?? undefined,
           }
         : {
             flavorId: row.flavor_id,
             packs: 0,
             requiredGrams: row.required_grams,
             useType: "oem",
+            useCode: row.use_code ?? undefined,
             oemPartner: row.oem_partner ?? undefined,
             oemGrams: row.required_grams,
           };
@@ -191,7 +209,7 @@ export default function App() {
   const mastersData = mastersQuery.data;
   const mastersLoading = mastersQuery.isLoading || (!mastersData && !mastersQuery.error);
 
-  const { factories, storageByFactory, flavors, oemList } = useMemo(
+  const { factories, storageByFactory, flavors, oemList, uses, allowedByUse } = useMemo(
     () => deriveDataFromMasters(mastersData),
     [mastersData],
   );
@@ -288,6 +306,8 @@ export default function App() {
             oemList={oemList}
             findFlavor={findFlavor}
             mastersLoading={mastersLoading}
+            uses={uses}
+            allowedByUse={allowedByUse}
           />
         </TabsContent>
         <TabsContent value="floor" className="mt-6">
@@ -300,6 +320,7 @@ export default function App() {
             calcExpiry={calcExpiry}
             registerOnsiteMake={registerOnsiteMake}
             mastersLoading={mastersLoading}
+            uses={uses}
           />
         </TabsContent>
       </Tabs>
@@ -314,23 +335,47 @@ function Office({
   oemList,
   findFlavor,
   mastersLoading,
+  uses,
+  allowedByUse,
 }: {
   factories: { code: string; name: string }[];
   flavors: FlavorWithRecipe[];
   oemList: string[];
   findFlavor: (id: string) => FlavorWithRecipe;
   mastersLoading: boolean;
+  uses: { code: string; name: string; type: "fissule" | "oem" }[];
+  allowedByUse: Record<string, Set<string>>;
 }) {
   const [factory, setFactory] = useState(factories[0]?.code ?? "");
   const [flavor, setFlavor] = useState(flavors[0]?.id ?? "");
-  const [useType, setUseType] = useState<"fissule" | "oem">("fissule");
+  const [useCode, setUseCode] = useState(uses[0]?.code ?? "");
   const [packs, setPacks] = useState(100);
   const [oemPartner, setOemPartner] = useState(oemList[0] ?? "");
   const [oemGrams, setOemGrams] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const seqRef = useRef<Record<string, number>>({});
+  const selectedUse = useMemo(
+    () => uses.find(u => u.code === useCode),
+    [uses, useCode],
+  );
+  const derivedUseType: "fissule" | "oem" = selectedUse?.type === "oem" ? "oem" : "fissule";
+  const allowedSet = useMemo(() => allowedByUse[useCode], [allowedByUse, useCode]);
+  const flavorOptions = useMemo(() => {
+    if (allowedSet && allowedSet.size > 0) {
+      return flavors.filter(fl => allowedSet.has(fl.id));
+    }
+    return flavors;
+  }, [allowedSet, flavors]);
+  const purposeLabelByCode = useMemo(() => {
+    const map: Record<string, string> = {};
+    uses.forEach(u => {
+      map[u.code] = u.name;
+    });
+    return map;
+  }, [uses]);
   const factoryDisabled = mastersLoading || factories.length === 0;
-  const flavorDisabled = mastersLoading || flavors.length === 0;
+  const purposeDisabled = mastersLoading || uses.length === 0;
+  const flavorDisabled = mastersLoading || flavorOptions.length === 0;
   const oemDisabled = mastersLoading || oemList.length === 0;
 
   useEffect(() => {
@@ -340,10 +385,28 @@ function Office({
   }, [factories, factory]);
 
   useEffect(() => {
-    if (flavors.length && !flavors.some(fl => fl.id === flavor)) {
-      setFlavor(flavors[0].id);
+    if (!uses.length) {
+      if (useCode !== "") {
+        setUseCode("");
+      }
+      return;
     }
-  }, [flavors, flavor]);
+    if (!useCode || !uses.some(u => u.code === useCode)) {
+      setUseCode(uses[0].code);
+    }
+  }, [uses, useCode]);
+
+  useEffect(() => {
+    if (!flavorOptions.length) {
+      if (flavor !== "") {
+        setFlavor("");
+      }
+      return;
+    }
+    if (!flavorOptions.some(fl => fl.id === flavor)) {
+      setFlavor(flavorOptions[0].id);
+    }
+  }, [flavorOptions, flavor]);
 
   useEffect(() => {
     if (oemList.length && !oemList.includes(oemPartner)) {
@@ -390,9 +453,9 @@ function Office({
   }, [orderCards]);
 
   const createOrder = useCallback(async () => {
-    if (!factory || !flavor) return;
-    if (useType === "fissule" && packs <= 0) return;
-    if (useType === "oem" && (!oemPartner || oemGrams <= 0)) return;
+    if (!factory || !flavor || !useCode) return;
+    if (derivedUseType === "fissule" && packs <= 0) return;
+    if (derivedUseType === "oem" && (!oemPartner || oemGrams <= 0)) return;
     const today = new Date();
     const dateSegment = format(today, "yyyyMMdd");
     const key = `${factory}-${dateSegment}`;
@@ -400,13 +463,14 @@ function Office({
     const lotId = genLotId(factory, seq, today);
     const orderedAt = format(today, "yyyy-MM-dd");
     const body =
-      useType === "fissule"
+      derivedUseType === "fissule"
         ? {
             factory_code: factory,
             lot_id: lotId,
             ordered_at: orderedAt,
             flavor_id: flavor,
             use_type: "fissule" as const,
+            use_code: useCode,
             packs,
             required_grams: packs * (findFlavor(flavor)?.packToGram ?? 0),
             oem_partner: "",
@@ -418,6 +482,7 @@ function Office({
             ordered_at: orderedAt,
             flavor_id: flavor,
             use_type: "oem" as const,
+            use_code: useCode,
             packs: 0,
             required_grams: oemGrams,
             oem_partner: oemPartner ?? "",
@@ -441,7 +506,7 @@ function Office({
     } finally {
       setSubmitting(false);
     }
-  }, [factory, flavor, useType, packs, oemPartner, oemGrams, findFlavor]);
+  }, [factory, flavor, useCode, derivedUseType, packs, oemPartner, oemGrams, findFlavor]);
 
   return (
     <div className="grid md:grid-cols-3 gap-6 items-start">
@@ -469,37 +534,42 @@ function Office({
               </SelectContent>
             </Select>
           </div>
-          {useType === "fissule" ? (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-              <div>
-                <Label>味付け</Label>
-                <Select value={flavor} onValueChange={setFlavor}>
-                  <SelectTrigger disabled={flavorDisabled}>
-                    <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {flavors.length
-                      ? flavors.map(fl => (
-                          <SelectItem key={fl.id} value={fl.id}>
-                            {fl.flavorName}
-                          </SelectItem>
-                        ))
-                      : selectFallback(mastersLoading)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label>用途</Label>
-                <Select value={useType} onValueChange={(value: "fissule" | "oem") => setUseType(value)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="fissule">製品（パック）</SelectItem>
-                    <SelectItem value="oem">OEM</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+            <div>
+              <Label>味付け</Label>
+              <Select value={flavor} onValueChange={setFlavor}>
+                <SelectTrigger disabled={flavorDisabled}>
+                  <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {flavorOptions.length
+                    ? flavorOptions.map(fl => (
+                        <SelectItem key={fl.id} value={fl.id}>
+                          {fl.flavorName}
+                        </SelectItem>
+                      ))
+                    : selectFallback(mastersLoading)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>用途</Label>
+              <Select value={useCode} onValueChange={setUseCode}>
+                <SelectTrigger disabled={purposeDisabled}>
+                  <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {uses.length
+                    ? uses.map(u => (
+                        <SelectItem key={u.code} value={u.code}>
+                          {u.name}
+                        </SelectItem>
+                      ))
+                    : selectFallback(mastersLoading)}
+                </SelectContent>
+              </Select>
+            </div>
+            {derivedUseType === "fissule" ? (
               <div>
                 <Label>パック数</Label>
                 <Input
@@ -511,38 +581,7 @@ function Office({
                   必要量: {formatGram(packs * (findFlavor(flavor)?.packToGram ?? 0))}
                 </div>
               </div>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-              <div>
-                <Label>味付け</Label>
-                <Select value={flavor} onValueChange={setFlavor}>
-                  <SelectTrigger disabled={flavorDisabled}>
-                    <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {flavors.length
-                      ? flavors.map(fl => (
-                          <SelectItem key={fl.id} value={fl.id}>
-                            {fl.flavorName}
-                          </SelectItem>
-                        ))
-                      : selectFallback(mastersLoading)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label>用途</Label>
-                <Select value={useType} onValueChange={(value: "fissule" | "oem") => setUseType(value)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="fissule">製品（パック）</SelectItem>
-                    <SelectItem value="oem">OEM</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+            ) : (
               <div>
                 <Label>OEM先</Label>
                 <Select value={oemPartner} onValueChange={setOemPartner}>
@@ -560,14 +599,16 @@ function Office({
                   </SelectContent>
                 </Select>
               </div>
-              <div className="md:col-span-3">
-                <Label>作成グラム数（g）</Label>
-                <Input
-                  type="number"
-                  value={oemGrams}
-                  onChange={e => setOemGrams(Number.parseInt(e.target.value || "0", 10))}
-                />
-              </div>
+            )}
+          </div>
+          {derivedUseType === "oem" && (
+            <div>
+              <Label>作成グラム数（g）</Label>
+              <Input
+                type="number"
+                value={oemGrams}
+                onChange={e => setOemGrams(Number.parseInt(e.target.value || "0", 10))}
+              />
             </div>
           )}
           <div className="flex gap-3">
@@ -619,7 +660,13 @@ function Office({
                   <div key={idx} className="text-sm grid gap-3">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <Field label="味付け">{f.flavorName}</Field>
-                      <Field label="用途">{ln.useType === "oem" ? "OEM" : "製品"}</Field>
+                      <Field label="用途">
+                        {(() => {
+                          const label = ln.useCode ? purposeLabelByCode[ln.useCode] ?? ln.useCode : undefined;
+                          const typeLabel = ln.useType === "oem" ? "OEM" : "製品";
+                          return label ? `${label}（${typeLabel}）` : typeLabel;
+                        })()}
+                      </Field>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <Field label={ln.useType === "fissule" ? "パック数" : "OEM先"}>
@@ -657,6 +704,7 @@ function Floor({
   calcExpiry,
   registerOnsiteMake,
   mastersLoading,
+  uses,
 }: {
   factories: { code: string; name: string }[];
   flavors: FlavorWithRecipe[];
@@ -674,6 +722,7 @@ function Floor({
     leftover?: { loc: string; grams: number },
   ) => Promise<void>;
   mastersLoading: boolean;
+  uses: { code: string; name: string; type: "fissule" | "oem" }[];
 }) {
   const [factory, setFactory] = useState(factories[0]?.code ?? "");
   const [extraOpen, setExtraOpen] = useState(false);
@@ -694,6 +743,14 @@ function Floor({
 
   const orders = useMemo(() => normalizeOrders(ordersQuery.data), [ordersQuery.data]);
   const storageAgg = useMemo(() => normalizeStorage(storageAggQuery.data), [storageAggQuery.data]);
+
+  const purposeLabelByCode = useMemo(() => {
+    const map: Record<string, string> = {};
+    uses.forEach(u => {
+      map[u.code] = u.name;
+    });
+    return map;
+  }, [uses]);
 
   const openOrders = useMemo(
     () => orders.filter(order => !order.archived && order.factoryCode === factory),
@@ -791,20 +848,21 @@ function Floor({
           }
         >
           {openOrders.map(order => (
-            <OrderCardView
-              key={order.orderId}
-              order={order}
-              remainingPacks={Math.max(
-                0,
-                order.lines[0]?.packsRemaining ?? order.lines[0]?.packs ?? 0,
-              )}
-              onKeep={values => handleKeep(order, values)}
-              onReportMade={report => handleReportMade(order, report)}
-              findFlavor={findFlavor}
-              storageByFactory={storageByFactory}
-              mastersLoading={mastersLoading}
-            />
-          ))}
+          <OrderCardView
+            key={order.orderId}
+            order={order}
+            remainingPacks={Math.max(
+              0,
+              order.lines[0]?.packsRemaining ?? order.lines[0]?.packs ?? 0,
+            )}
+            onKeep={values => handleKeep(order, values)}
+            onReportMade={report => handleReportMade(order, report)}
+            findFlavor={findFlavor}
+            storageByFactory={storageByFactory}
+            mastersLoading={mastersLoading}
+            purposeLabelByCode={purposeLabelByCode}
+          />
+        ))}
           {openOrders.length === 0 && <Empty>ここにカードが表示されます</Empty>}
         </KanbanColumn>
         <KanbanColumn title="保管（在庫）" icon={<Warehouse className="h-4 w-4" />}>
@@ -883,6 +941,7 @@ function OrderCardView({
   findFlavor,
   storageByFactory,
   mastersLoading,
+  purposeLabelByCode,
 }: {
   order: OrderCard;
   remainingPacks: number;
@@ -891,6 +950,7 @@ function OrderCardView({
   findFlavor: (id: string) => FlavorWithRecipe;
   storageByFactory: Record<string, string[]>;
   mastersLoading: boolean;
+  purposeLabelByCode: Record<string, string>;
 }) {
   const [open, setOpen] = useState<null | "keep" | "made" | "skip" | "choice" | "split">(null);
   const line = order.lines[0];
@@ -913,7 +973,13 @@ function OrderCardView({
         <div className="text-sm grid gap-3">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Field label="味付け">{flavor.flavorName}</Field>
-            <Field label="用途">{line.useType === "oem" ? "OEM" : "製品"}</Field>
+            <Field label="用途">
+              {(() => {
+                const label = line.useCode ? purposeLabelByCode[line.useCode] ?? line.useCode : undefined;
+                const typeLabel = line.useType === "oem" ? "OEM" : "製品";
+                return label ? `${label}（${typeLabel}）` : typeLabel;
+              })()}
+            </Field>
           </div>
           {line.useType === "fissule" && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1054,7 +1120,7 @@ function KeepDialog({
     } catch {
       // keep dialog open
     } finally {
-      setSubmitting(false);
+           setSubmitting(false);
     }
   };
 
@@ -1612,8 +1678,7 @@ function StorageCardView({
       setUseLoading(true);
       const resp = await apiPost<{
         storage_after?: { grams: number; packs_equiv?: number | null };
-      }>("/exec", {
-        path: "action",
+      }>("action", {
         type: "USE",
         factory_code: factoryCode,
         lot_id: agg.lotId,
@@ -1660,8 +1725,7 @@ function StorageCardView({
 
       const resp = await apiPost<{
         storage_after?: { grams: number; packs_equiv?: number | null };
-      }>("/exec", {
-        path: "action",
+      }>("action", {
         type: "WASTE",
         factory_code: factoryCode,
         lot_id: agg.lotId,
