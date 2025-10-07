@@ -136,15 +136,15 @@ function deriveDataFromMasters(masters?: Masters) {
       type: u.use_type,
     })) ?? [];
 
-  const useToFlavorIds: Record<string, Set<string>> = {};
+  const allowedByUse: Record<string, Set<string>> = {};
   masters?.use_flavors?.forEach(row => {
-    if (!useToFlavorIds[row.use_code]) {
-      useToFlavorIds[row.use_code] = new Set();
+    if (!allowedByUse[row.use_code]) {
+      allowedByUse[row.use_code] = new Set();
     }
-    useToFlavorIds[row.use_code].add(row.flavor_id);
+    allowedByUse[row.use_code].add(row.flavor_id);
   });
 
-  return { factories, storageByFactory, flavors, oemList, uses, useToFlavorIds };
+  return { factories, storageByFactory, flavors, oemList, uses, allowedByUse };
 }
 
 function normalizeOrders(rows?: OrderRow[]): OrderCard[] {
@@ -209,7 +209,7 @@ export default function App() {
   const mastersData = mastersQuery.data;
   const mastersLoading = mastersQuery.isLoading || (!mastersData && !mastersQuery.error);
 
-  const { factories, storageByFactory, flavors, oemList, uses, useToFlavorIds } = useMemo(
+  const { factories, storageByFactory, flavors, oemList, uses, allowedByUse } = useMemo(
     () => deriveDataFromMasters(mastersData),
     [mastersData],
   );
@@ -307,7 +307,7 @@ export default function App() {
             findFlavor={findFlavor}
             mastersLoading={mastersLoading}
             uses={uses}
-            useToFlavorIds={useToFlavorIds}
+            allowedByUse={allowedByUse}
           />
         </TabsContent>
         <TabsContent value="floor" className="mt-6">
@@ -336,7 +336,7 @@ function Office({
   findFlavor,
   mastersLoading,
   uses,
-  useToFlavorIds,
+  allowedByUse,
 }: {
   factories: { code: string; name: string }[];
   flavors: FlavorWithRecipe[];
@@ -344,31 +344,28 @@ function Office({
   findFlavor: (id: string) => FlavorWithRecipe;
   mastersLoading: boolean;
   uses: { code: string; name: string; type: "fissule" | "oem" }[];
-  useToFlavorIds: Record<string, Set<string>>;
+  allowedByUse: Record<string, Set<string>>;
 }) {
   const [factory, setFactory] = useState(factories[0]?.code ?? "");
   const [flavor, setFlavor] = useState(flavors[0]?.id ?? "");
-  const [purpose, setPurpose] = useState(uses[0]?.code ?? "");
+  const [useCode, setUseCode] = useState(uses[0]?.code ?? "");
   const [packs, setPacks] = useState(100);
   const [oemPartner, setOemPartner] = useState(oemList[0] ?? "");
   const [oemGrams, setOemGrams] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const seqRef = useRef<Record<string, number>>({});
-  const selectedPurpose = useMemo(
-    () => uses.find(u => u.code === purpose),
-    [uses, purpose],
+  const selectedUse = useMemo(
+    () => uses.find(u => u.code === useCode),
+    [uses, useCode],
   );
-  const useType: "fissule" | "oem" = selectedPurpose?.type === "oem" ? "oem" : "fissule";
-  const filteredFlavors = useMemo(() => {
-    if (!selectedPurpose) {
-      return flavors;
-    }
-    const allowed = useToFlavorIds[selectedPurpose.code];
-    if (allowed && allowed.size > 0) {
-      return flavors.filter(fl => allowed.has(fl.id));
+  const derivedUseType: "fissule" | "oem" = selectedUse?.type === "oem" ? "oem" : "fissule";
+  const allowedSet = useMemo(() => allowedByUse[useCode], [allowedByUse, useCode]);
+  const flavorOptions = useMemo(() => {
+    if (allowedSet && allowedSet.size > 0) {
+      return flavors.filter(fl => allowedSet.has(fl.id));
     }
     return flavors;
-  }, [flavors, selectedPurpose, useToFlavorIds]);
+  }, [allowedSet, flavors]);
   const purposeLabelByCode = useMemo(() => {
     const map: Record<string, string> = {};
     uses.forEach(u => {
@@ -378,7 +375,7 @@ function Office({
   }, [uses]);
   const factoryDisabled = mastersLoading || factories.length === 0;
   const purposeDisabled = mastersLoading || uses.length === 0;
-  const flavorDisabled = mastersLoading || filteredFlavors.length === 0;
+  const flavorDisabled = mastersLoading || flavorOptions.length === 0;
   const oemDisabled = mastersLoading || oemList.length === 0;
 
   useEffect(() => {
@@ -389,27 +386,27 @@ function Office({
 
   useEffect(() => {
     if (!uses.length) {
-      if (purpose !== "") {
-        setPurpose("");
+      if (useCode !== "") {
+        setUseCode("");
       }
       return;
     }
-    if (!purpose || !uses.some(u => u.code === purpose)) {
-      setPurpose(uses[0].code);
+    if (!useCode || !uses.some(u => u.code === useCode)) {
+      setUseCode(uses[0].code);
     }
-  }, [uses, purpose]);
+  }, [uses, useCode]);
 
   useEffect(() => {
-    if (!filteredFlavors.length) {
+    if (!flavorOptions.length) {
       if (flavor !== "") {
         setFlavor("");
       }
       return;
     }
-    if (!filteredFlavors.some(fl => fl.id === flavor)) {
-      setFlavor(filteredFlavors[0].id);
+    if (!flavorOptions.some(fl => fl.id === flavor)) {
+      setFlavor(flavorOptions[0].id);
     }
-  }, [filteredFlavors, flavor]);
+  }, [flavorOptions, flavor]);
 
   useEffect(() => {
     if (oemList.length && !oemList.includes(oemPartner)) {
@@ -456,9 +453,9 @@ function Office({
   }, [orderCards]);
 
   const createOrder = useCallback(async () => {
-    if (!factory || !flavor || !purpose) return;
-    if (useType === "fissule" && packs <= 0) return;
-    if (useType === "oem" && (!oemPartner || oemGrams <= 0)) return;
+    if (!factory || !flavor || !useCode) return;
+    if (derivedUseType === "fissule" && packs <= 0) return;
+    if (derivedUseType === "oem" && (!oemPartner || oemGrams <= 0)) return;
     const today = new Date();
     const dateSegment = format(today, "yyyyMMdd");
     const key = `${factory}-${dateSegment}`;
@@ -466,14 +463,14 @@ function Office({
     const lotId = genLotId(factory, seq, today);
     const orderedAt = format(today, "yyyy-MM-dd");
     const body =
-      useType === "fissule"
+      derivedUseType === "fissule"
         ? {
             factory_code: factory,
             lot_id: lotId,
             ordered_at: orderedAt,
             flavor_id: flavor,
             use_type: "fissule" as const,
-            use_code: purpose,
+            use_code: useCode,
             packs,
             required_grams: packs * (findFlavor(flavor)?.packToGram ?? 0),
             oem_partner: "",
@@ -485,7 +482,7 @@ function Office({
             ordered_at: orderedAt,
             flavor_id: flavor,
             use_type: "oem" as const,
-            use_code: purpose,
+            use_code: useCode,
             packs: 0,
             required_grams: oemGrams,
             oem_partner: oemPartner ?? "",
@@ -509,7 +506,7 @@ function Office({
     } finally {
       setSubmitting(false);
     }
-  }, [factory, flavor, purpose, useType, packs, oemPartner, oemGrams, findFlavor]);
+  }, [factory, flavor, useCode, derivedUseType, packs, oemPartner, oemGrams, findFlavor]);
 
   return (
     <div className="grid md:grid-cols-3 gap-6 items-start">
@@ -545,8 +542,8 @@ function Office({
                   <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
                 </SelectTrigger>
                 <SelectContent>
-                  {filteredFlavors.length
-                    ? filteredFlavors.map(fl => (
+                  {flavorOptions.length
+                    ? flavorOptions.map(fl => (
                         <SelectItem key={fl.id} value={fl.id}>
                           {fl.flavorName}
                         </SelectItem>
@@ -557,7 +554,7 @@ function Office({
             </div>
             <div>
               <Label>用途</Label>
-              <Select value={purpose} onValueChange={setPurpose}>
+              <Select value={useCode} onValueChange={setUseCode}>
                 <SelectTrigger disabled={purposeDisabled}>
                   <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
                 </SelectTrigger>
@@ -572,7 +569,7 @@ function Office({
                 </SelectContent>
               </Select>
             </div>
-            {useType === "fissule" ? (
+            {derivedUseType === "fissule" ? (
               <div>
                 <Label>パック数</Label>
                 <Input
@@ -604,7 +601,7 @@ function Office({
               </div>
             )}
           </div>
-          {useType === "oem" && (
+          {derivedUseType === "oem" && (
             <div>
               <Label>作成グラム数（g）</Label>
               <Input
