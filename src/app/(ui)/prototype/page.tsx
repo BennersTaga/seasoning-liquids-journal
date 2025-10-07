@@ -520,7 +520,10 @@ function Office({
           <div>
             <Label>製造場所</Label>
             <Select value={factory} onValueChange={setFactory}>
-              <SelectTrigger disabled={factoryDisabled}>
+              <SelectTrigger
+                disabled={factoryDisabled}
+                className="w-full text-left h-auto min-h-[44px] py-2 whitespace-normal break-words"
+              >
                 <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
               </SelectTrigger>
               <SelectContent>
@@ -534,58 +537,68 @@ function Office({
               </SelectContent>
             </Select>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+          <div>
+            <Label>用途</Label>
+            <Select value={useCode} onValueChange={setUseCode}>
+              <SelectTrigger
+                disabled={purposeDisabled}
+                className="w-full text-left h-auto min-h-[44px] py-2 whitespace-normal break-words"
+              >
+                <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
+              </SelectTrigger>
+              <SelectContent>
+                {uses.length
+                  ? uses.map(u => (
+                      <SelectItem key={u.code} value={u.code}>
+                        {u.name}
+                      </SelectItem>
+                    ))
+                  : selectFallback(mastersLoading)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label>味付け</Label>
+            <Select value={flavor} onValueChange={setFlavor}>
+              <SelectTrigger
+                disabled={flavorDisabled}
+                className="w-full text-left h-auto min-h-[44px] py-2 whitespace-normal break-words"
+              >
+                <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
+              </SelectTrigger>
+              <SelectContent>
+                {flavorOptions.length
+                  ? flavorOptions.map(fl => (
+                      <SelectItem key={fl.id} value={fl.id}>
+                        {fl.flavorName}
+                      </SelectItem>
+                    ))
+                  : selectFallback(mastersLoading)}
+              </SelectContent>
+            </Select>
+          </div>
+          {derivedUseType === "fissule" ? (
             <div>
-              <Label>味付け</Label>
-              <Select value={flavor} onValueChange={setFlavor}>
-                <SelectTrigger disabled={flavorDisabled}>
-                  <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {flavorOptions.length
-                    ? flavorOptions.map(fl => (
-                        <SelectItem key={fl.id} value={fl.id}>
-                          {fl.flavorName}
-                        </SelectItem>
-                      ))
-                    : selectFallback(mastersLoading)}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>用途</Label>
-              <Select value={useCode} onValueChange={setUseCode}>
-                <SelectTrigger disabled={purposeDisabled}>
-                  <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {uses.length
-                    ? uses.map(u => (
-                        <SelectItem key={u.code} value={u.code}>
-                          {u.name}
-                        </SelectItem>
-                      ))
-                    : selectFallback(mastersLoading)}
-                </SelectContent>
-              </Select>
-            </div>
-            {derivedUseType === "fissule" ? (
-              <div>
-                <Label>パック数</Label>
-                <Input
-                  type="number"
-                  value={packs}
-                  onChange={e => setPacks(Number.parseInt(e.target.value || "0", 10))}
-                />
-                <div className="text-xs text-muted-foreground mt-1">
-                  必要量: {formatGram(packs * (findFlavor(flavor)?.packToGram ?? 0))}
-                </div>
+              <Label>パック数</Label>
+              <Input
+                type="number"
+                value={packs}
+                onChange={e => setPacks(Number.parseInt(e.target.value || "0", 10))}
+                className="w-full"
+              />
+              <div className="text-xs text-muted-foreground mt-1">
+                必要量: {formatGram(packs * (findFlavor(flavor)?.packToGram ?? 0))}
               </div>
-            ) : (
+            </div>
+          ) : (
+            <>
               <div>
                 <Label>OEM先</Label>
                 <Select value={oemPartner} onValueChange={setOemPartner}>
-                  <SelectTrigger disabled={oemDisabled}>
+                  <SelectTrigger
+                    disabled={oemDisabled}
+                    className="w-full text-left h-auto min-h-[44px] py-2 whitespace-normal break-words"
+                  >
                     <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
                   </SelectTrigger>
                   <SelectContent>
@@ -599,17 +612,16 @@ function Office({
                   </SelectContent>
                 </Select>
               </div>
-            )}
-          </div>
-          {derivedUseType === "oem" && (
-            <div>
-              <Label>作成グラム数（g）</Label>
-              <Input
-                type="number"
-                value={oemGrams}
-                onChange={e => setOemGrams(Number.parseInt(e.target.value || "0", 10))}
-              />
-            </div>
+              <div>
+                <Label>作成グラム数（g）</Label>
+                <Input
+                  type="number"
+                  value={oemGrams}
+                  onChange={e => setOemGrams(Number.parseInt(e.target.value || "0", 10))}
+                  className="w-full"
+                />
+              </div>
+            </>
           )}
           <div className="flex gap-3">
             <Button onClick={createOrder} disabled={submitting}>
