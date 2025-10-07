@@ -1120,7 +1120,7 @@ function KeepDialog({
     } catch {
       // keep dialog open
     } finally {
-      setSubmitting(false);
+           setSubmitting(false);
     }
   };
 
@@ -1678,8 +1678,7 @@ function StorageCardView({
       setUseLoading(true);
       const resp = await apiPost<{
         storage_after?: { grams: number; packs_equiv?: number | null };
-      }>("/exec", {
-        path: "action",
+      }>("action", {
         type: "USE",
         factory_code: factoryCode,
         lot_id: agg.lotId,
@@ -1718,20 +1717,22 @@ function StorageCardView({
     if (wasteReason === "" || wasteQty <= 0) return;
     try {
       setWasteLoading(true);
+      // 「その他」でも数値送信。grams/qty を同値で送る（GAS 側は grams 優先）
       const payload =
         wasteReason === "other"
           ? { reason: "other", note: wasteText, grams: wasteQty, qty: wasteQty, location }
           : { reason: wasteReason, grams: wasteQty, qty: wasteQty, location };
+
       const resp = await apiPost<{
         storage_after?: { grams: number; packs_equiv?: number | null };
-      }>("/exec", {
-        path: "action",
+      }>("action", {
         type: "WASTE",
         factory_code: factoryCode,
         lot_id: agg.lotId,
         flavor_id: agg.flavorId,
         payload,
       });
+
       await mutate(["storage-agg", factoryCode], undefined, { revalidate: true });
       if (resp?.storage_after) {
         setCurrentGrams(resp.storage_after.grams);
