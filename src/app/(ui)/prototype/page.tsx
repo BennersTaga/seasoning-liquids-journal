@@ -10,15 +10,26 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Package, Warehouse, Archive, Beaker, Factory, Trash2, Boxes, ChefHat, CalendarRange } from "lucide-react";
+import {
+  Plus,
+  Package,
+  Warehouse,
+  Archive,
+  Beaker,
+  Factory,
+  Trash2,
+  Boxes,
+  ChefHat,
+  CalendarDays,
+  Search,
+} from "lucide-react";
 import { format } from "date-fns";
-import { mutate } from "swr";
+import useSWR, { mutate } from "swr";
 
 import { apiPost } from "@/lib/gas";
 import { useMasters } from "@/hooks/useMasters";
 import { useOrders } from "@/hooks/useOrders";
 import { useStorageAgg } from "@/hooks/useStorageAgg";
-import { useMadeSummary } from "@/hooks/useMadeSummary";
 import type { Masters, OrderRow, StorageAggRow } from "@/lib/sheets/types";
 
 type FlavorRecipeItem = { ingredient: string; qty: number; unit: string };
@@ -209,6 +220,185 @@ function normalizeStorage(rows?: StorageAggRow[]): StorageAggEntry[] {
     .filter(entry => Math.abs(entry.grams) > 0);
 }
 
+/* ===== 期間集計（フロント） ===== */
+
+type ReportItem = {
+  flavor_id: string;
+  flavor_name: string;
+  grams: number;
+  packs_equiv: number;
+};
+
+type ReportUse = {
+  use_code: string;
+  use_name: string;
+  use_type: "fissule" | "oem";
+  total_grams: number;
+  total_packs_equiv: number;
+  items: ReportItem[];
+};
+
+type ReportFactory = {
+  factory_code: string;
+  factory_name: string;
+  total_grams: number;
+  total_packs_equiv: number;
+  uses: ReportUse[];
+};
+
+type ReportResponse = {
+  start: string;
+  end: string;
+  factories: ReportFactory[];
+};
+
+function PeriodSummaryDialog({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  const today = format(new Date(), "yyyy-MM-dd");
+  const [start, setStart] = useState(today);
+  const [end, setEnd] = useState(today);
+  const [queryKey, setQueryKey] = useState<{ s?: string; e?: string }>({});
+
+  const fetcher = useCallback(async (): Promise<ReportResponse> => {
+    const base = process.env.NEXT_PUBLIC_GAS_URL;
+    const key = process.env.NEXT_PUBLIC_GAS_KEY;
+    if (!base) {
+      throw new Error("GAS URL が設定されていません");
+    }
+    if (!key) {
+      throw new Error("GAS KEY が設定されていません");
+    }
+    const url = new URL(base);
+    url.searchParams.set("path", "report-range");
+    url.searchParams.set("start", queryKey.s!);
+    url.searchParams.set("end", queryKey.e!);
+    url.searchParams.set("key", key);
+    const response = await fetch(url.toString());
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return (await response.json()) as ReportResponse;
+  }, [queryKey.e, queryKey.s]);
+
+  const { data, error, isLoading } = useSWR<ReportResponse>(
+    () => (queryKey.s && queryKey.e ? ["report-range", queryKey.s, queryKey.e] : null),
+    fetcher,
+    { keepPreviousData: true },
+  );
+
+  const runSearch = useCallback(() => {
+    if (!start || !end) {
+      return;
+    }
+    if (start > end) {
+      alert("開始日は終了日以前に設定してください");
+      return;
+    }
+    setQueryKey({ s: start, e: end });
+  }, [end, start]);
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={next => {
+        if (!next) {
+          onClose();
+        }
+      }}
+    >
+      <DialogContent className="max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>期間集計</DialogTitle>
+        </DialogHeader>
+        <div className="grid grid-cols-1 items-end gap-3 md:grid-cols-3">
+          <div>
+            <div className="mb-1 text-xs">開始日</div>
+            <Input type="date" value={start} onChange={event => setStart(event.target.value)} />
+          </div>
+          <div>
+            <div className="mb-1 text-xs">終了日</div>
+            <Input type="date" value={end} onChange={event => setEnd(event.target.value)} />
+          </div>
+          <div>
+            <Button type="button" className="w-full gap-2" onClick={runSearch}>
+              <Search className="h-4 w-4" />
+              検索
+            </Button>
+          </div>
+        </div>
+        <div className="mt-4 space-y-3">
+          {isLoading && <div className="text-sm text-muted-foreground">読み込み中...</div>}
+          {error && <div className="text-sm text-red-600">読み込みに失敗しました</div>}
+          {data && <ReportResultView data={data} />}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function formatPackApprox(n: number) {
+  return formatNumber(Math.round(n));
+}
+
+function ReportResultView({ data }: { data: ReportResponse }) {
+  if (!data.factories.length) {
+    return (
+      <div className="text-sm text-muted-foreground">
+        範囲: {data.start} 〜 {data.end}
+        <div className="mt-2">該当するデータがありません。</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="text-sm text-muted-foreground">
+        範囲: {data.start} 〜 {data.end}
+      </div>
+      {data.factories.map(factory => (
+        <div key={factory.factory_code} className="rounded-xl border p-3">
+          <div className="mb-1 font-medium">
+            {factory.factory_name}（{factory.factory_code}）
+          </div>
+          <div className="mb-3 text-sm">
+            合計: <b>{formatGram(factory.total_grams)}</b>（約 {formatPackApprox(factory.total_packs_equiv)} パック）
+          </div>
+          <div className="space-y-3">
+            {factory.uses.map(use => (
+              <div key={use.use_code} className="rounded-lg bg-muted/40 p-2">
+                <div className="mb-2 text-sm">
+                  用途: <b className="whitespace-normal break-words">{use.use_name}</b>（
+                  {use.use_type === "oem" ? "OEM" : "製品"}） / 合計 <b>{formatGram(use.total_grams)}</b>（約 {formatPackApprox(use.total_packs_equiv)} パック）
+                </div>
+                <div className="grid gap-2 md:grid-cols-2">
+                  {use.items.map(item => (
+                    <div
+                      key={item.flavor_id}
+                      className="flex justify-between gap-4 rounded-md border px-2 py-1 text-sm"
+                    >
+                      <span className="whitespace-normal break-words">{item.flavor_name}</span>
+                      <span className="whitespace-normal break-words text-right">
+                        {formatGram(item.grams)}（約 {formatPackApprox(item.packs_equiv)} パック）
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ===== メイン App ===== */
+
 export default function App() {
   const [tab, setTab] = useState("office");
   const mastersQuery = useMasters();
@@ -220,50 +410,7 @@ export default function App() {
     [mastersData],
   );
 
-  const [summaryOpen, setSummaryOpen] = useState(false);
-  const [summaryStart, setSummaryStart] = useState(() => {
-    const now = new Date();
-    return format(new Date(now.getFullYear(), now.getMonth(), 1), "yyyy-MM-dd");
-  });
-  const [summaryEnd, setSummaryEnd] = useState(() => format(new Date(), "yyyy-MM-dd"));
-  const [summaryFactory, setSummaryFactory] = useState<string>("");
-  const [summaryParams, setSummaryParams] = useState<
-    { start: string; end: string; factory?: string }
-  >();
-
-  const summaryQuery = useMadeSummary(
-    summaryParams?.start,
-    summaryParams?.end,
-    summaryParams?.factory ?? null,
-  );
-  const summaryData = summaryQuery.data;
-  const summaryLoading = summaryQuery.isLoading;
-  const summaryError = summaryQuery.error as Error | undefined;
-
-  const handleSummaryRun = useCallback(() => {
-    if (!summaryStart || !summaryEnd) {
-      return;
-    }
-    if (summaryStart > summaryEnd) {
-      alert("開始日は終了日以前に設定してください");
-      return;
-    }
-    setSummaryParams({
-      start: summaryStart,
-      end: summaryEnd,
-      ...(summaryFactory ? { factory: summaryFactory } : {}),
-    });
-  }, [summaryStart, summaryEnd, summaryFactory]);
-
-  const summaryRangeText = useMemo(() => {
-    if (summaryData?.start && summaryData?.end) {
-      return `${summaryData.start} 〜 ${summaryData.end}`;
-    }
-    if (summaryParams?.start && summaryParams?.end) {
-      return `${summaryParams.start} 〜 ${summaryParams.end}`;
-    }
-    return "";
-  }, [summaryData, summaryParams]);
+  const [periodOpen, setPeriodOpen] = useState(false);
 
   const findFlavor = useCallback(
     (id: string) => {
@@ -354,10 +501,10 @@ export default function App() {
           <Button
             type="button"
             variant="outline"
-            className="inline-flex items-center gap-2 self-start md:self-auto"
-            onClick={() => setSummaryOpen(true)}
+            className="gap-2"
+            onClick={() => setPeriodOpen(true)}
           >
-            <CalendarRange className="h-4 w-4" />期間集計
+            <CalendarDays className="h-4 w-4" />期間集計
           </Button>
         </div>
         <TabsContent value="office" className="mt-6">
@@ -385,159 +532,13 @@ export default function App() {
           />
         </TabsContent>
       </Tabs>
-      <Dialog open={summaryOpen} onOpenChange={setSummaryOpen}>
-        <DialogContent className="max-w-5xl">
-          <DialogHeader>
-            <DialogTitle>期間集計</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="summary-start">開始日</Label>
-                <Input
-                  id="summary-start"
-                  type="date"
-                  value={summaryStart}
-                  onChange={event => setSummaryStart(event.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="summary-end">終了日</Label>
-                <Input
-                  id="summary-end"
-                  type="date"
-                  value={summaryEnd}
-                  onChange={event => setSummaryEnd(event.target.value)}
-                />
-              </div>
-              <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="summary-factory">製造場所</Label>
-                <Select
-                  value={summaryFactory}
-                  onValueChange={setSummaryFactory}
-                >
-                  <SelectTrigger className="w-full text-left h-auto min-h-[44px] py-2 whitespace-normal break-words">
-                    <SelectValue placeholder="全ての製造場所" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="">全ての製造場所</SelectItem>
-                    {factories.map(factory => (
-                      <SelectItem key={factory.code} value={factory.code}>
-                        {factory.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="rounded-md border border-dashed bg-muted/30 p-3 text-xs text-muted-foreground">
-              期間と製造場所を指定して「集計」を押すと、「製造場所 × 用途 × 味付け」ごとの製造量を表示します。
-            </div>
-            {summaryError ? (
-              <div className="rounded-md border border-destructive bg-destructive/10 p-3 text-sm text-destructive">
-                集計の取得に失敗しました: {summaryError.message ?? "不明なエラー"}
-              </div>
-            ) : null}
-            {summaryLoading ? (
-              <div className="py-6 text-sm text-muted-foreground">読み込み中...</div>
-            ) : summaryData ? (
-              summaryData.factories.length ? (
-                <div className="overflow-x-auto">
-                  <table className="min-w-full text-sm">
-                    <thead>
-                      <tr className="text-left text-xs uppercase text-muted-foreground">
-                        <th className="whitespace-normal break-words px-3 py-2">製造場所</th>
-                        <th className="whitespace-normal break-words px-3 py-2">用途</th>
-                        <th className="whitespace-normal break-words px-3 py-2">味付け</th>
-                        <th className="whitespace-normal break-words px-3 py-2 text-right">製造量 (g)</th>
-                        <th className="whitespace-normal break-words px-3 py-2 text-right">パック換算 (約)</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {summaryData.factories.map(factory => (
-                        <React.Fragment key={factory.factory_code}>
-                          <tr className="bg-muted/40 font-medium">
-                            <td className="whitespace-normal break-words px-3 py-2 align-top">{factory.factory_name}</td>
-                            <td className="whitespace-normal break-words px-3 py-2 align-top text-muted-foreground">
-                              合計
-                            </td>
-                            <td className="whitespace-normal break-words px-3 py-2 align-top text-muted-foreground">
-                              -
-                            </td>
-                            <td className="whitespace-normal break-words px-3 py-2 text-right align-top">
-                              {formatNumber(Math.round(factory.total_grams))}
-                            </td>
-                            <td className="whitespace-normal break-words px-3 py-2 text-right align-top">
-                              {formatPacks(factory.total_packs_equiv)}
-                            </td>
-                          </tr>
-                          {factory.uses.map(use => (
-                            <React.Fragment key={`${factory.factory_code}-${use.use_code}`}>
-                              <tr className="bg-muted/10">
-                                <td className="whitespace-normal break-words px-3 py-2 align-top" />
-                                <td className="whitespace-normal break-words px-3 py-2 align-top font-medium">
-                                  {use.use_name}
-                                </td>
-                                <td className="whitespace-normal break-words px-3 py-2 align-top text-muted-foreground">
-                                  合計
-                                </td>
-                                <td className="whitespace-normal break-words px-3 py-2 text-right align-top">
-                                  {formatNumber(Math.round(use.total_grams))}
-                                </td>
-                                <td className="whitespace-normal break-words px-3 py-2 text-right align-top">
-                                  {formatPacks(use.total_packs_equiv)}
-                                </td>
-                              </tr>
-                              {use.items.map(item => (
-                                <tr key={`${factory.factory_code}-${use.use_code}-${item.flavor_id}`}>
-                                  <td className="whitespace-normal break-words px-3 py-2 align-top" />
-                                  <td className="whitespace-normal break-words px-3 py-2 align-top text-muted-foreground">
-                                    ↳
-                                  </td>
-                                  <td className="whitespace-normal break-words px-3 py-2 align-top">
-                                    {item.flavor_name}
-                                  </td>
-                                  <td className="whitespace-normal break-words px-3 py-2 text-right align-top">
-                                    {formatNumber(Math.round(item.grams))}
-                                  </td>
-                                  <td className="whitespace-normal break-words px-3 py-2 text-right align-top">
-                                    {formatPacks(item.packs_equiv)}
-                                  </td>
-                                </tr>
-                              ))}
-                            </React.Fragment>
-                          ))}
-                        </React.Fragment>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="py-6 text-sm text-muted-foreground">該当するデータがありません。</div>
-              )
-            ) : (
-              <div className="py-6 text-sm text-muted-foreground">期間を指定して集計してください。</div>
-            )}
-          </div>
-          <DialogFooter className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="text-xs text-muted-foreground">
-              {summaryRangeText ? `対象期間: ${summaryRangeText}` : "対象期間を選択してください"}
-            </div>
-            <div className="flex w-full justify-end gap-2 sm:w-auto">
-              <Button type="button" variant="outline" onClick={() => setSummaryOpen(false)}>
-                閉じる
-              </Button>
-              <Button type="button" onClick={handleSummaryRun} disabled={!summaryStart || !summaryEnd}>
-                集計
-              </Button>
-            </div>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <PeriodSummaryDialog open={periodOpen} onClose={() => setPeriodOpen(false)} />
       <footer className="text-xs text-center text-muted-foreground opacity-70">GAS 連携バージョン</footer>
     </div>
   );
 }
+
+/* ===== Office タブ ===== */
 
 function Office({
   factories,
@@ -752,7 +753,7 @@ function Office({
             <Select value={useCode} onValueChange={setUseCode}>
               <SelectTrigger
                 disabled={purposeDisabled}
-                className="w-full text-left h-auto min-h-[44px] py-2 whitespace-normal break-words"
+                className="w-full text左 h-auto min-h-[44px] py-2 whitespace-normal break-words"
               >
                 <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
               </SelectTrigger>
@@ -916,6 +917,8 @@ function Office({
     </div>
   );
 }
+
+/* ===== Floor タブ ===== */
 
 function Floor({
   factories,
@@ -1116,6 +1119,8 @@ function Floor({
   );
 }
 
+/* ===== 共通 UI ===== */
+
 function KanbanColumn({
   title,
   icon,
@@ -1154,6 +1159,8 @@ const Field = ({ label, children }: { label: string; children: React.ReactNode }
     <div className="text-sm font-medium leading-tight">{children}</div>
   </div>
 );
+
+/* ===== 各種ダイアログ/カード ===== */
 
 function OrderCardView({
   order,
@@ -1342,7 +1349,7 @@ function KeepDialog({
     } catch {
       // keep dialog open
     } finally {
-           setSubmitting(false);
+      setSubmitting(false);
     }
   };
 
@@ -1935,11 +1942,9 @@ function StorageCardView({
   const handleWaste = async () => {
     const location = effectiveLocation(loc);
     if (!location) return;
-    // 数量は理由に関係なく必須
     if (wasteReason === "" || wasteQty <= 0) return;
     try {
       setWasteLoading(true);
-      // 「その他」でも数値送信。grams/qty を同値で送る（GAS 側は grams 優先）
       const payload =
         wasteReason === "other"
           ? { reason: "other", note: wasteText, grams: wasteQty, qty: wasteQty, location }
