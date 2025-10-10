@@ -1,56 +1,27 @@
-function parseJson<T>(text: string): T {
-  try {
-    return text ? (JSON.parse(text) as T) : (undefined as T);
-  } catch (error) {
-    console.debug("[GAS]", { stage: "parse-error", text, error });
-    throw error;
-  }
-}
-
-export async function apiGet<T = unknown>(path: string, params?: Record<string, unknown>): Promise<T> {
-  const usp = new URLSearchParams();
+export async function apiGet<T = unknown>(path: string, params?: Record<string, string>) {
+  const url = new URL("/api/gas", window.location.origin);
+  url.searchParams.set("path", path);
   Object.entries(params || {}).forEach(([key, value]) => {
-    if (value === undefined || value === null) return;
-    usp.set(key, String(value));
-  });
-  const query = usp.toString();
-  const url = query ? `/api/gas/${path}?${query}` : `/api/gas/${path}`;
-
-  console.debug("[GAS]", { stage: "get:start", path, params });
-  try {
-    const res = await fetch(url, { cache: "no-store" });
-    const text = await res.text();
-    if (!res.ok) {
-      console.debug("[GAS]", { stage: "get:error", path, params, status: res.status, body: text });
-      throw new Error(text || `Request failed: ${res.status}`);
+    if (value != null) {
+      url.searchParams.set(key, String(value));
     }
-    const data = parseJson<T>(text);
-    console.debug("[GAS]", { stage: "get:success", path, params, result: data });
-    return data;
-  } catch (error) {
-    console.debug("[GAS]", { stage: "get:throw", path, params, error });
-    throw error;
+  });
+
+  const response = await fetch(url.toString(), { method: "GET" });
+  if (!response.ok) {
+    throw new Error(await response.text());
   }
+  return (await response.json()) as T;
 }
 
-export async function apiPost<T = unknown>(path: string, body: unknown): Promise<T> {
-  console.debug("[GAS]", { stage: "post:start", path, payload: body });
-  try {
-    const res = await fetch(`/api/gas/${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path, ...(body as Record<string, unknown>) }),
-    });
-    const text = await res.text();
-    if (!res.ok) {
-      console.debug("[GAS]", { stage: "post:error", path, payload: body, status: res.status, body: text });
-      throw new Error(text || `Request failed: ${res.status}`);
-    }
-    const data = parseJson<T>(text);
-    console.debug("[GAS]", { stage: "post:success", path, payload: body, result: data });
-    return data;
-  } catch (error) {
-    console.debug("[GAS]", { stage: "post:throw", path, payload: body, error });
-    throw error;
+export async function apiPost<T = unknown>(path: string, body?: Record<string, unknown>) {
+  const response = await fetch("/api/gas", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path, ...(body ?? {}) }),
+  });
+  if (!response.ok) {
+    throw new Error(await response.text());
   }
+  return (await response.json()) as T;
 }
