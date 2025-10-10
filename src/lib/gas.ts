@@ -1,3 +1,5 @@
+// lib/gas.ts (conflict resolved)
+
 function parseJson<T>(text: string): T {
   try {
     return text ? (JSON.parse(text) as T) : (undefined as T);
@@ -7,30 +9,36 @@ function parseJson<T>(text: string): T {
   }
 }
 
-export async function apiGet<T = unknown>(path: string, params?: Record<string, unknown>): Promise<T> {
+export async function apiGet<T = unknown>(
+  path: string,
+  params?: Record<string, unknown>,
+): Promise<T> {
   const usp = new URLSearchParams();
   usp.set("path", path);
   Object.entries(params || {}).forEach(([key, value]) => {
-    if (value === undefined || value === null) return;
-    usp.set(key, String(value));
+    if (value != null) usp.set(key, String(value));
   });
-  const url = `/api/gas?${usp.toString()}`;
 
-  console.debug("[GAS]", { stage: "get:start", path, params });
-  try {
-    const res = await fetch(url, { cache: "no-store" });
-    const text = await res.text();
-    if (!res.ok) {
-      console.debug("[GAS]", { stage: "get:error", path, params, status: res.status, body: text });
-      throw new Error(text || `Request failed: ${res.status}`);
-    }
-    const data = parseJson<T>(text);
-    console.debug("[GAS]", { stage: "get:success", path, params, result: data });
-    return data;
-  } catch (error) {
-    console.debug("[GAS]", { stage: "get:throw", path, params, error });
-    throw error;
+  const url = `/api/gas?${usp.toString()}`;
+  console.debug("[GAS]", { stage: "get:start", path, params, url });
+
+  const res = await fetch(url, { method: "GET" });
+  const text = await res.text();
+
+  if (!res.ok) {
+    console.debug("[GAS]", {
+      stage: "get:error",
+      path,
+      params,
+      status: res.status,
+      body: text,
+    });
+    throw new Error(text || `Request failed: ${res.status}`);
   }
+
+  const data = parseJson<T>(text);
+  console.debug("[GAS]", { stage: "get:success", path, params, result: data });
+  return data;
 }
 
 export async function apiPost<T = unknown>(path: string, body: unknown): Promise<T> {
@@ -43,7 +51,13 @@ export async function apiPost<T = unknown>(path: string, body: unknown): Promise
     });
     const text = await res.text();
     if (!res.ok) {
-      console.debug("[GAS]", { stage: "post:error", path, payload: body, status: res.status, body: text });
+      console.debug("[GAS]", {
+        stage: "post:error",
+        path,
+        payload: body,
+        status: res.status,
+        body: text,
+      });
       throw new Error(text || `Request failed: ${res.status}`);
     }
     const data = parseJson<T>(text);
