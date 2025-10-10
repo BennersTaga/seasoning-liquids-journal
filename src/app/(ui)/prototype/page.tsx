@@ -10,19 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
-import {
-  Plus,
-  Package,
-  Warehouse,
-  Archive,
-  Beaker,
-  Factory,
-  Trash2,
-  Boxes,
-  ChefHat,
-  CalendarDays,
-  Search,
-} from "lucide-react";
+import { Plus, Package, Warehouse, Archive, Beaker, Factory, Trash2, Boxes, ChefHat } from "lucide-react";
 import { format } from "date-fns";
 import useSWR, { mutate } from "swr";
 
@@ -220,169 +208,6 @@ function normalizeStorage(rows?: StorageAggRow[]): StorageAggEntry[] {
     .filter(entry => Math.abs(entry.grams) > 0);
 }
 
-/* ===== 期間集計（フロント） ===== */
-
-type ReportItem = {
-  flavor_id: string;
-  flavor_name: string;
-  grams: number;
-  packs_equiv: number;
-};
-
-type ReportUse = {
-  use_code: string;
-  use_name: string;
-  use_type: "fissule" | "oem";
-  total_grams: number;
-  total_packs_equiv: number;
-  items: ReportItem[];
-};
-
-type ReportFactory = {
-  factory_code: string;
-  factory_name: string;
-  total_grams: number;
-  total_packs_equiv: number;
-  uses: ReportUse[];
-};
-
-type ReportResponse = {
-  start: string;
-  end: string;
-  factories: ReportFactory[];
-};
-
-function PeriodSummaryDialog({
-  open,
-  onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}) {
-  const today = format(new Date(), "yyyy-MM-dd");
-  const [start, setStart] = useState(today);
-  const [end, setEnd] = useState(today);
-  const [queryKey, setQueryKey] = useState<{ s?: string; e?: string }>({});
-
-  const fetcher = useCallback(async (): Promise<ReportResponse> => {
-    return apiGet<ReportResponse>("report-range", {
-      start: queryKey.s!,
-      end: queryKey.e!,
-    });
-  }, [queryKey.e, queryKey.s]);
-
-  const { data, error, isLoading } = useSWR<ReportResponse>(
-    () => (queryKey.s && queryKey.e ? ["report-range", queryKey.s, queryKey.e] : null),
-    fetcher,
-    { keepPreviousData: true },
-  );
-
-  const runSearch = useCallback(() => {
-    if (!start || !end) {
-      return;
-    }
-    if (start > end) {
-      alert("開始日は終了日以前に設定してください");
-      return;
-    }
-    setQueryKey({ s: start, e: end });
-  }, [end, start]);
-
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={next => {
-        if (!next) {
-          onClose();
-        }
-      }}
-    >
-      <DialogContent className="max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>期間集計</DialogTitle>
-        </DialogHeader>
-        <div className="grid grid-cols-1 items-end gap-3 md:grid-cols-3">
-          <div>
-            <div className="mb-1 text-xs">開始日</div>
-            <Input type="date" value={start} onChange={event => setStart(event.target.value)} />
-          </div>
-          <div>
-            <div className="mb-1 text-xs">終了日</div>
-            <Input type="date" value={end} onChange={event => setEnd(event.target.value)} />
-          </div>
-          <div>
-            <Button type="button" className="w-full gap-2" onClick={runSearch}>
-              <Search className="h-4 w-4" />
-              検索
-            </Button>
-          </div>
-        </div>
-        <div className="mt-4 space-y-3">
-          {isLoading && <div className="text-sm text-muted-foreground">読み込み中...</div>}
-          {error && <div className="text-sm text-red-600">読み込みに失敗しました</div>}
-          {data && <ReportResultView data={data} />}
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function formatPackApprox(n: number) {
-  return formatNumber(Math.round(n));
-}
-
-function ReportResultView({ data }: { data: ReportResponse }) {
-  if (!data.factories.length) {
-    return (
-      <div className="text-sm text-muted-foreground">
-        範囲: {data.start} 〜 {data.end}
-        <div className="mt-2">該当するデータがありません。</div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="text-sm text-muted-foreground">
-        範囲: {data.start} 〜 {data.end}
-      </div>
-      {data.factories.map(factory => (
-        <div key={factory.factory_code} className="rounded-xl border p-3">
-          <div className="mb-1 font-medium">
-            {factory.factory_name}（{factory.factory_code}）
-          </div>
-          <div className="mb-3 text-sm">
-            合計: <b>{formatGram(factory.total_grams)}</b>（約 {formatPackApprox(factory.total_packs_equiv)} パック）
-          </div>
-          <div className="space-y-3">
-            {factory.uses.map(use => (
-              <div key={use.use_code} className="rounded-lg bg-muted/40 p-2">
-                <div className="mb-2 text-sm">
-                  用途: <b className="whitespace-normal break-words">{use.use_name}</b>（
-                  {use.use_type === "oem" ? "OEM" : "製品"}） / 合計 <b>{formatGram(use.total_grams)}</b>（約 {formatPackApprox(use.total_packs_equiv)} パック）
-                </div>
-                <div className="grid gap-2 md:grid-cols-2">
-                  {use.items.map(item => (
-                    <div
-                      key={item.flavor_id}
-                      className="flex justify-between gap-4 rounded-md border px-2 py-1 text-sm"
-                    >
-                      <span className="whitespace-normal break-words">{item.flavor_name}</span>
-                      <span className="whitespace-normal break-words text-right">
-                        {formatGram(item.grams)}（約 {formatPackApprox(item.packs_equiv)} パック）
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 /* ===== メイン App ===== */
 
 export default function App() {
@@ -395,8 +220,6 @@ export default function App() {
     () => deriveDataFromMasters(mastersData),
     [mastersData],
   );
-
-  const [periodOpen, setPeriodOpen] = useState(false);
 
   const findFlavor = useCallback(
     (id: string) => {
@@ -484,14 +307,7 @@ export default function App() {
               <Boxes className="h-4 w-4" />現場（フロア）
             </TabsTrigger>
           </TabsList>
-          <Button
-            type="button"
-            variant="outline"
-            className="gap-2"
-            onClick={() => setPeriodOpen(true)}
-          >
-            <CalendarDays className="h-4 w-4" />期間集計
-          </Button>
+          <div className="h-9" />
         </div>
         <TabsContent value="office" className="mt-6">
           <Office
@@ -518,7 +334,6 @@ export default function App() {
           />
         </TabsContent>
       </Tabs>
-      <PeriodSummaryDialog open={periodOpen} onClose={() => setPeriodOpen(false)} />
       <footer className="text-xs text-center text-muted-foreground opacity-70">GAS 連携バージョン</footer>
     </div>
   );
