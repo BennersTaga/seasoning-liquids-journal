@@ -26,7 +26,7 @@ import {
 import { format } from "date-fns";
 import useSWR, { mutate } from "swr";
 
-import { apiPost } from "@/lib/gas";
+import { apiGet, apiPost } from "@/lib/gas";
 import { useMasters } from "@/hooks/useMasters";
 import { useOrders } from "@/hooks/useOrders";
 import { useStorageAgg } from "@/hooks/useStorageAgg";
@@ -265,24 +265,10 @@ function PeriodSummaryDialog({
   const [queryKey, setQueryKey] = useState<{ s?: string; e?: string }>({});
 
   const fetcher = useCallback(async (): Promise<ReportResponse> => {
-    const base = process.env.NEXT_PUBLIC_GAS_URL;
-    const key = process.env.NEXT_PUBLIC_GAS_KEY;
-    if (!base) {
-      throw new Error("GAS URL が設定されていません");
-    }
-    if (!key) {
-      throw new Error("GAS KEY が設定されていません");
-    }
-    const url = new URL(base);
-    url.searchParams.set("path", "report-range");
-    url.searchParams.set("start", queryKey.s!);
-    url.searchParams.set("end", queryKey.e!);
-    url.searchParams.set("key", key);
-    const response = await fetch(url.toString());
-    if (!response.ok) {
-      throw new Error(await response.text());
-    }
-    return (await response.json()) as ReportResponse;
+    return apiGet<ReportResponse>("report-range", {
+      start: queryKey.s!,
+      end: queryKey.e!,
+    });
   }, [queryKey.e, queryKey.s]);
 
   const { data, error, isLoading } = useSWR<ReportResponse>(
@@ -753,7 +739,7 @@ function Office({
             <Select value={useCode} onValueChange={setUseCode}>
               <SelectTrigger
                 disabled={purposeDisabled}
-                className="w-full text左 h-auto min-h-[44px] py-2 whitespace-normal break-words"
+                className="w-full text-left h-auto min-h-[44px] py-2 whitespace-normal break-words"
               >
                 <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
               </SelectTrigger>
