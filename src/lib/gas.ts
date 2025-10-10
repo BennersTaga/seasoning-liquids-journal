@@ -9,12 +9,12 @@ function parseJson<T>(text: string): T {
 
 export async function apiGet<T = unknown>(path: string, params?: Record<string, unknown>): Promise<T> {
   const usp = new URLSearchParams();
+  usp.set("path", path);
   Object.entries(params || {}).forEach(([key, value]) => {
     if (value === undefined || value === null) return;
     usp.set(key, String(value));
   });
-  const query = usp.toString();
-  const url = query ? `/api/gas/${path}?${query}` : `/api/gas/${path}`;
+  const url = `/api/gas?${usp.toString()}`;
 
   console.debug("[GAS]", { stage: "get:start", path, params });
   try {
@@ -36,7 +36,7 @@ export async function apiGet<T = unknown>(path: string, params?: Record<string, 
 export async function apiPost<T = unknown>(path: string, body: unknown): Promise<T> {
   console.debug("[GAS]", { stage: "post:start", path, payload: body });
   try {
-    const res = await fetch(`/api/gas/${path}`, {
+    const res = await fetch(`/api/gas`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ path, ...(body as Record<string, unknown>) }),
