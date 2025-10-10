@@ -10,9 +10,21 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Package, Warehouse, Archive, Beaker, Factory, Trash2, Boxes, ChefHat } from "lucide-react";
+import {
+  Plus,
+  Package,
+  Warehouse,
+  Archive,
+  Beaker,
+  Factory,
+  Trash2,
+  Boxes,
+  ChefHat,
+  CalendarDays,
+  Search,
+} from "lucide-react";
 import { format } from "date-fns";
-import { mutate } from "swr";
+import useSWR, { mutate } from "swr";
 
 import { apiPost } from "@/lib/gas";
 import { useMasters } from "@/hooks/useMasters";
@@ -203,6 +215,181 @@ function normalizeStorage(rows?: StorageAggRow[]): StorageAggEntry[] {
     .filter(entry => Math.abs(entry.grams) > 0);
 }
 
+type ReportItem = {
+  flavor_id: string;
+  flavor_name: string;
+  grams: number;
+  packs_equiv: number;
+};
+
+type ReportUse = {
+  use_code: string;
+  use_name: string;
+  use_type: "fissule" | "oem";
+  total_grams: number;
+  total_packs_equiv: number;
+  items: ReportItem[];
+};
+
+type ReportFactory = {
+  factory_code: string;
+  factory_name: string;
+  total_grams: number;
+  total_packs_equiv: number;
+  uses: ReportUse[];
+};
+
+type ReportResponse = {
+  start: string;
+  end: string;
+  factories: ReportFactory[];
+};
+
+function PeriodSummaryDialog({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  const today = format(new Date(), "yyyy-MM-dd");
+  const [start, setStart] = useState(today);
+  const [end, setEnd] = useState(today);
+  const [queryKey, setQueryKey] = useState<{ s?: string; e?: string }>({});
+
+  const fetcher = useCallback(async (): Promise<ReportResponse> => {
+    const base = process.env.NEXT_PUBLIC_GAS_URL;
+    const key = process.env.NEXT_PUBLIC_GAS_KEY;
+    if (!base) {
+      throw new Error("GAS URL が設定されていません");
+    }
+    if (!key) {
+      throw new Error("GAS KEY が設定されていません");
+    }
+    const url = new URL(base);
+    url.searchParams.set("path", "report-range");
+    url.searchParams.set("start", queryKey.s!);
+    url.searchParams.set("end", queryKey.e!);
+    url.searchParams.set("key", key);
+    const response = await fetch(url.toString());
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return (await response.json()) as ReportResponse;
+  }, [queryKey.e, queryKey.s]);
+
+  const { data, error, isLoading } = useSWR<ReportResponse>(
+    () => (queryKey.s && queryKey.e ? ["report-range", queryKey.s, queryKey.e] : null),
+    fetcher,
+    { keepPreviousData: true },
+  );
+
+  const runSearch = useCallback(() => {
+    if (!start || !end) {
+      return;
+    }
+    if (start > end) {
+      alert("開始日は終了日以前に設定してください");
+      return;
+    }
+    setQueryKey({ s: start, e: end });
+  }, [end, start]);
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={next => {
+        if (!next) {
+          onClose();
+        }
+      }}
+    >
+      <DialogContent className="max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>期間集計</DialogTitle>
+        </DialogHeader>
+        <div className="grid grid-cols-1 items-end gap-3 md:grid-cols-3">
+          <div>
+            <div className="mb-1 text-xs">開始日</div>
+            <Input type="date" value={start} onChange={event => setStart(event.target.value)} />
+          </div>
+          <div>
+            <div className="mb-1 text-xs">終了日</div>
+            <Input type="date" value={end} onChange={event => setEnd(event.target.value)} />
+          </div>
+          <div>
+            <Button type="button" className="w-full gap-2" onClick={runSearch}>
+              <Search className="h-4 w-4" />
+              検索
+            </Button>
+          </div>
+        </div>
+        <div className="mt-4 space-y-3">
+          {isLoading && <div className="text-sm text-muted-foreground">読み込み中...</div>}
+          {error && <div className="text-sm text-red-600">読み込みに失敗しました</div>}
+          {data && <ReportResultView data={data} />}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function formatPackApprox(n: number) {
+  return formatNumber(Math.round(n));
+}
+
+function ReportResultView({ data }: { data: ReportResponse }) {
+  if (!data.factories.length) {
+    return (
+      <div className="text-sm text-muted-foreground">
+        範囲: {data.start} 〜 {data.end}
+        <div className="mt-2">該当するデータがありません。</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="text-sm text-muted-foreground">
+        範囲: {data.start} 〜 {data.end}
+      </div>
+      {data.factories.map(factory => (
+        <div key={factory.factory_code} className="rounded-xl border p-3">
+          <div className="mb-1 font-medium">
+            {factory.factory_name}（{factory.factory_code}）
+          </div>
+          <div className="mb-3 text-sm">
+            合計: <b>{formatGram(factory.total_grams)}</b>（約 {formatPackApprox(factory.total_packs_equiv)} パック）
+          </div>
+          <div className="space-y-3">
+            {factory.uses.map(use => (
+              <div key={use.use_code} className="rounded-lg bg-muted/40 p-2">
+                <div className="mb-2 text-sm">
+                  用途: <b className="whitespace-normal break-words">{use.use_name}</b>（
+                  {use.use_type === "oem" ? "OEM" : "製品"}） / 合計 <b>{formatGram(use.total_grams)}</b>（約 {formatPackApprox(use.total_packs_equiv)} パック）
+                </div>
+                <div className="grid gap-2 md:grid-cols-2">
+                  {use.items.map(item => (
+                    <div
+                      key={item.flavor_id}
+                      className="flex justify-between gap-4 rounded-md border px-2 py-1 text-sm"
+                    >
+                      <span className="whitespace-normal break-words">{item.flavor_name}</span>
+                      <span className="whitespace-normal break-words text-right">
+                        {formatGram(item.grams)}（約 {formatPackApprox(item.packs_equiv)} パック）
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function App() {
   const [tab, setTab] = useState("office");
   const mastersQuery = useMasters();
@@ -213,6 +400,8 @@ export default function App() {
     () => deriveDataFromMasters(mastersData),
     [mastersData],
   );
+
+  const [periodOpen, setPeriodOpen] = useState(false);
 
   const findFlavor = useCallback(
     (id: string) => {
@@ -291,14 +480,24 @@ export default function App() {
         <div className="text-sm opacity-80">タブで「オフィス / 現場」を切替</div>
       </header>
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="grid grid-cols-2 w-full md:w-96">
-          <TabsTrigger value="office" className="flex gap-2">
-            <Factory className="h-4 w-4" />オフィス（5F/管理）
-          </TabsTrigger>
-          <TabsTrigger value="floor" className="flex gap-2">
-            <Boxes className="h-4 w-4" />現場（フロア）
-          </TabsTrigger>
-        </TabsList>
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <TabsList className="grid w-full grid-cols-2 md:w-96">
+            <TabsTrigger value="office" className="flex gap-2">
+              <Factory className="h-4 w-4" />オフィス（5F/管理）
+            </TabsTrigger>
+            <TabsTrigger value="floor" className="flex gap-2">
+              <Boxes className="h-4 w-4" />現場（フロア）
+            </TabsTrigger>
+          </TabsList>
+          <Button
+            type="button"
+            variant="outline"
+            className="gap-2"
+            onClick={() => setPeriodOpen(true)}
+          >
+            <CalendarDays className="h-4 w-4" />期間集計
+          </Button>
+        </div>
         <TabsContent value="office" className="mt-6">
           <Office
             factories={factories}
@@ -324,6 +523,7 @@ export default function App() {
           />
         </TabsContent>
       </Tabs>
+      <PeriodSummaryDialog open={periodOpen} onClose={() => setPeriodOpen(false)} />
       <footer className="text-xs text-center text-muted-foreground opacity-70">GAS 連携バージョン</footer>
     </div>
   );
@@ -520,7 +720,10 @@ function Office({
           <div>
             <Label>製造場所</Label>
             <Select value={factory} onValueChange={setFactory}>
-              <SelectTrigger disabled={factoryDisabled}>
+              <SelectTrigger
+                disabled={factoryDisabled}
+                className="w-full text-left h-auto min-h-[44px] py-2 whitespace-normal break-words"
+              >
                 <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
               </SelectTrigger>
               <SelectContent>
@@ -534,58 +737,68 @@ function Office({
               </SelectContent>
             </Select>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+          <div>
+            <Label>用途</Label>
+            <Select value={useCode} onValueChange={setUseCode}>
+              <SelectTrigger
+                disabled={purposeDisabled}
+                className="w-full text-left h-auto min-h-[44px] py-2 whitespace-normal break-words"
+              >
+                <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
+              </SelectTrigger>
+              <SelectContent>
+                {uses.length
+                  ? uses.map(u => (
+                      <SelectItem key={u.code} value={u.code}>
+                        {u.name}
+                      </SelectItem>
+                    ))
+                  : selectFallback(mastersLoading)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label>味付け</Label>
+            <Select value={flavor} onValueChange={setFlavor}>
+              <SelectTrigger
+                disabled={flavorDisabled}
+                className="w-full text-left h-auto min-h-[44px] py-2 whitespace-normal break-words"
+              >
+                <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
+              </SelectTrigger>
+              <SelectContent>
+                {flavorOptions.length
+                  ? flavorOptions.map(fl => (
+                      <SelectItem key={fl.id} value={fl.id}>
+                        {fl.flavorName}
+                      </SelectItem>
+                    ))
+                  : selectFallback(mastersLoading)}
+              </SelectContent>
+            </Select>
+          </div>
+          {derivedUseType === "fissule" ? (
             <div>
-              <Label>味付け</Label>
-              <Select value={flavor} onValueChange={setFlavor}>
-                <SelectTrigger disabled={flavorDisabled}>
-                  <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {flavorOptions.length
-                    ? flavorOptions.map(fl => (
-                        <SelectItem key={fl.id} value={fl.id}>
-                          {fl.flavorName}
-                        </SelectItem>
-                      ))
-                    : selectFallback(mastersLoading)}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>用途</Label>
-              <Select value={useCode} onValueChange={setUseCode}>
-                <SelectTrigger disabled={purposeDisabled}>
-                  <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {uses.length
-                    ? uses.map(u => (
-                        <SelectItem key={u.code} value={u.code}>
-                          {u.name}
-                        </SelectItem>
-                      ))
-                    : selectFallback(mastersLoading)}
-                </SelectContent>
-              </Select>
-            </div>
-            {derivedUseType === "fissule" ? (
-              <div>
-                <Label>パック数</Label>
-                <Input
-                  type="number"
-                  value={packs}
-                  onChange={e => setPacks(Number.parseInt(e.target.value || "0", 10))}
-                />
-                <div className="text-xs text-muted-foreground mt-1">
-                  必要量: {formatGram(packs * (findFlavor(flavor)?.packToGram ?? 0))}
-                </div>
+              <Label>パック数</Label>
+              <Input
+                type="number"
+                value={packs}
+                onChange={e => setPacks(Number.parseInt(e.target.value || "0", 10))}
+                className="w-full"
+              />
+              <div className="text-xs text-muted-foreground mt-1">
+                必要量: {formatGram(packs * (findFlavor(flavor)?.packToGram ?? 0))}
               </div>
-            ) : (
+            </div>
+          ) : (
+            <>
               <div>
                 <Label>OEM先</Label>
                 <Select value={oemPartner} onValueChange={setOemPartner}>
-                  <SelectTrigger disabled={oemDisabled}>
+                  <SelectTrigger
+                    disabled={oemDisabled}
+                    className="w-full text-left h-auto min-h-[44px] py-2 whitespace-normal break-words"
+                  >
                     <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
                   </SelectTrigger>
                   <SelectContent>
@@ -599,17 +812,16 @@ function Office({
                   </SelectContent>
                 </Select>
               </div>
-            )}
-          </div>
-          {derivedUseType === "oem" && (
-            <div>
-              <Label>作成グラム数（g）</Label>
-              <Input
-                type="number"
-                value={oemGrams}
-                onChange={e => setOemGrams(Number.parseInt(e.target.value || "0", 10))}
-              />
-            </div>
+              <div>
+                <Label>作成グラム数（g）</Label>
+                <Input
+                  type="number"
+                  value={oemGrams}
+                  onChange={e => setOemGrams(Number.parseInt(e.target.value || "0", 10))}
+                  className="w-full"
+                />
+              </div>
+            </>
           )}
           <div className="flex gap-3">
             <Button onClick={createOrder} disabled={submitting}>
