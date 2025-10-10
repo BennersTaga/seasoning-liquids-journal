@@ -52,3 +52,46 @@ export interface ActionBody {
   flavor_id: string;
   payload: Record<string, unknown>;
 }
+
+export interface MadeSummaryItem {
+  factory_code: string;
+  factory_name: string;
+  use_code: string;
+  use_name: string;
+  use_type: UseType;
+  flavor_id: string;
+  flavor_name: string;
+  grams: number;
+  packs_equiv: number;
+}
+
+export interface MadeSummaryFlavorItem {
+  flavor_id: string;
+  flavor_name: string;
+  grams: number;
+  packs_equiv: number;
+}
+
+export interface MadeSummaryUseItem {
+  use_code: string;
+  use_name: string;
+  use_type: UseType;
+  total_grams: number;
+  total_packs_equiv: number;
+  items: MadeSummaryFlavorItem[];
+}
+
+export interface MadeSummaryFactoryItem {
+  factory_code: string;
+  factory_name: string;
+  total_grams: number;
+  total_packs_equiv: number;
+  uses: MadeSummaryUseItem[];
+}
+
+export interface MadeSummaryResponse {
+  start: string;
+  end: string;
+  rows: MadeSummaryItem[];
+  factories: MadeSummaryFactoryItem[];
+}
