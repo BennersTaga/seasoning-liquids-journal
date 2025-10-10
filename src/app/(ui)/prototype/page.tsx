@@ -100,6 +100,11 @@ const selectFallback = (loading: boolean, emptyLabel = "データなし") => (
 
 const formatNumber = (n: number) => n.toLocaleString();
 const formatGram = (n: number) => `${formatNumber(n)} g`;
+const formatPacks = (n: number) =>
+  (Number.isFinite(n) ? n : 0).toLocaleString(undefined, {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  });
 const genLotId = (factoryCode: string, seq: number, d = new Date()) =>
   `${factoryCode}-${format(d, "yyyyMMdd")}-${String(seq).padStart(3, "0")}`;
 
@@ -214,6 +219,8 @@ function normalizeStorage(rows?: StorageAggRow[]): StorageAggEntry[] {
     }))
     .filter(entry => Math.abs(entry.grams) > 0);
 }
+
+/* ===== 期間集計（フロント） ===== */
 
 type ReportItem = {
   flavor_id: string;
@@ -390,6 +397,8 @@ function ReportResultView({ data }: { data: ReportResponse }) {
   );
 }
 
+/* ===== メイン App ===== */
+
 export default function App() {
   const [tab, setTab] = useState("office");
   const mastersQuery = useMasters();
@@ -528,6 +537,8 @@ export default function App() {
     </div>
   );
 }
+
+/* ===== Office タブ ===== */
 
 function Office({
   factories,
@@ -742,7 +753,7 @@ function Office({
             <Select value={useCode} onValueChange={setUseCode}>
               <SelectTrigger
                 disabled={purposeDisabled}
-                className="w-full text-left h-auto min-h-[44px] py-2 whitespace-normal break-words"
+                className="w-full text左 h-auto min-h-[44px] py-2 whitespace-normal break-words"
               >
                 <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
               </SelectTrigger>
@@ -906,6 +917,8 @@ function Office({
     </div>
   );
 }
+
+/* ===== Floor タブ ===== */
 
 function Floor({
   factories,
@@ -1106,6 +1119,8 @@ function Floor({
   );
 }
 
+/* ===== 共通 UI ===== */
+
 function KanbanColumn({
   title,
   icon,
@@ -1144,6 +1159,8 @@ const Field = ({ label, children }: { label: string; children: React.ReactNode }
     <div className="text-sm font-medium leading-tight">{children}</div>
   </div>
 );
+
+/* ===== 各種ダイアログ/カード ===== */
 
 function OrderCardView({
   order,
@@ -1332,7 +1349,7 @@ function KeepDialog({
     } catch {
       // keep dialog open
     } finally {
-           setSubmitting(false);
+      setSubmitting(false);
     }
   };
 
@@ -1925,11 +1942,9 @@ function StorageCardView({
   const handleWaste = async () => {
     const location = effectiveLocation(loc);
     if (!location) return;
-    // 数量は理由に関係なく必須
     if (wasteReason === "" || wasteQty <= 0) return;
     try {
       setWasteLoading(true);
-      // 「その他」でも数値送信。grams/qty を同値で送る（GAS 側は grams 優先）
       const payload =
         wasteReason === "other"
           ? { reason: "other", note: wasteText, grams: wasteQty, qty: wasteQty, location }
