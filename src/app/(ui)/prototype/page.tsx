@@ -694,7 +694,9 @@ function Office({
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <Field label={ln.useType === "fissule" ? "パック数" : "OEM先"}>
-                        {ln.useType === "fissule" ? ln.packs : ln.oemPartner}
+                        {ln.useType === "fissule"
+                          ? formatPacks(ln.packs)
+                          : ln.oemPartner ?? "-"}
                       </Field>
                       <Field label="必要量">
                         <span className="font-semibold">{formatGram(ln.requiredGrams)}</span>
