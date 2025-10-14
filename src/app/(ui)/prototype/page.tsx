@@ -156,25 +156,28 @@ function normalizeOrders(rows?: OrderRow[]): OrderCard[] {
   if (!rows?.length) return [];
   const map = new Map<string, OrderCard>();
   rows.forEach(row => {
-    const line: OrderLine =
-      row.use_type === "fissule"
-        ? {
-            flavorId: row.flavor_id,
-            packs: row.packs,
-            packsRemaining: row.packs_remaining ?? undefined,
-            requiredGrams: row.required_grams,
-            useType: "fissule",
-            useCode: row.use_code ?? undefined,
-          }
-        : {
-            flavorId: row.flavor_id,
-            packs: 0,
-            requiredGrams: row.required_grams,
-            useType: "oem",
-            useCode: row.use_code ?? undefined,
-            oemPartner: row.oem_partner ?? undefined,
-            oemGrams: row.required_grams,
-          };
+    const useTypeRaw = String(row.use_type ?? "").trim().toLowerCase();
+    const isOem = useTypeRaw === "oem";
+    const line: OrderLine = isOem
+      ? {
+          flavorId: row.flavor_id,
+          packs: 0,
+          requiredGrams: row.required_grams,
+          useType: "oem",
+          useCode: row.use_code ?? undefined,
+          oemPartner: row.oem_partner ?? undefined,
+          oemGrams: row.required_grams,
+        }
+      : {
+          flavorId: row.flavor_id,
+          packs: Number.isFinite(row.packs as number)
+            ? (row.packs as number)
+            : 0,
+          packsRemaining: row.packs_remaining ?? undefined,
+          requiredGrams: row.required_grams,
+          useType: "fissule",
+          useCode: row.use_code ?? undefined,
+        };
     const existing = map.get(row.order_id);
     if (existing) {
       existing.lines.push(line);
