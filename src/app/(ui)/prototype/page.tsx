@@ -1007,20 +1007,21 @@ function OrderCardView({
             <Field label="味付け">{flavor.flavorName}</Field>
             <Field label="用途">
               {(() => {
-                const label = line.useCode ? purposeLabelByCode[line.useCode] ?? line.useCode : undefined;
-                const typeLabel = line.useType === "oem" ? "OEM" : "製品";
-                return label ? `${label}（${typeLabel}）` : typeLabel;
+                const label = line.useCode ? purposeLabelByCode[line.useCode] ?? line.useCode : "-";
+                return label;
               })()}
             </Field>
           </div>
-          {line.useType === "fissule" && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Field label="パック数">
-                {line.packs}（残り {remainingPacks}）
-              </Field>
-              <Field label="必要量">{formatGram(line.requiredGrams)}</Field>
-            </div>
-          )}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Field label={line.useType === "fissule" ? "パック数" : "OEM先"}>
+              {line.useType === "fissule"
+                ? formatPacks(line.packs ?? 0)
+                : line.oemPartner ?? "-"}
+            </Field>
+            <Field label="必要量">
+              <span className="font-semibold">{formatGram(line.requiredGrams ?? 0)}</span>
+            </Field>
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => setOpen("keep")}>保管</Button>
