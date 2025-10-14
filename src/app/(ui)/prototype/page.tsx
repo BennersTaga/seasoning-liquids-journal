@@ -156,25 +156,28 @@ function normalizeOrders(rows?: OrderRow[]): OrderCard[] {
   if (!rows?.length) return [];
   const map = new Map<string, OrderCard>();
   rows.forEach(row => {
-    const line: OrderLine =
-      row.use_type === "fissule"
-        ? {
-            flavorId: row.flavor_id,
-            packs: row.packs,
-            packsRemaining: row.packs_remaining ?? undefined,
-            requiredGrams: row.required_grams,
-            useType: "fissule",
-            useCode: row.use_code ?? undefined,
-          }
-        : {
-            flavorId: row.flavor_id,
-            packs: 0,
-            requiredGrams: row.required_grams,
-            useType: "oem",
-            useCode: row.use_code ?? undefined,
-            oemPartner: row.oem_partner ?? undefined,
-            oemGrams: row.required_grams,
-          };
+    const useTypeRaw = String(row.use_type ?? "").trim().toLowerCase();
+    const isOem = useTypeRaw === "oem";
+    const line: OrderLine = isOem
+      ? {
+          flavorId: row.flavor_id,
+          packs: 0,
+          requiredGrams: row.required_grams,
+          useType: "oem",
+          useCode: row.use_code ?? undefined,
+          oemPartner: row.oem_partner ?? undefined,
+          oemGrams: row.required_grams,
+        }
+      : {
+          flavorId: row.flavor_id,
+          packs: Number.isFinite(row.packs as number)
+            ? (row.packs as number)
+            : 0,
+          packsRemaining: row.packs_remaining ?? undefined,
+          requiredGrams: row.required_grams,
+          useType: "fissule",
+          useCode: row.use_code ?? undefined,
+        };
     const existing = map.get(row.order_id);
     if (existing) {
       existing.lines.push(line);
@@ -694,7 +697,9 @@ function Office({
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <Field label={ln.useType === "fissule" ? "パック数" : "OEM先"}>
-                        {ln.useType === "fissule" ? ln.packs : ln.oemPartner}
+                        {ln.useType === "fissule"
+                          ? formatPacks(ln.packs)
+                          : ln.oemPartner ?? "-"}
                       </Field>
                       <Field label="必要量">
                         <span className="font-semibold">{formatGram(ln.requiredGrams)}</span>
@@ -1005,20 +1010,21 @@ function OrderCardView({
             <Field label="味付け">{flavor.flavorName}</Field>
             <Field label="用途">
               {(() => {
-                const label = line.useCode ? purposeLabelByCode[line.useCode] ?? line.useCode : undefined;
-                const typeLabel = line.useType === "oem" ? "OEM" : "製品";
-                return label ? `${label}（${typeLabel}）` : typeLabel;
+                const label = line.useCode ? purposeLabelByCode[line.useCode] ?? line.useCode : "-";
+                return label;
               })()}
             </Field>
           </div>
-          {line.useType === "fissule" && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Field label="パック数">
-                {line.packs}（残り {remainingPacks}）
-              </Field>
-              <Field label="必要量">{formatGram(line.requiredGrams)}</Field>
-            </div>
-          )}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Field label={line.useType === "fissule" ? "パック数" : "OEM先"}>
+              {line.useType === "fissule"
+                ? formatPacks(line.packs ?? 0)
+                : line.oemPartner ?? "-"}
+            </Field>
+            <Field label="必要量">
+              <span className="font-semibold">{formatGram(line.requiredGrams ?? 0)}</span>
+            </Field>
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => setOpen("keep")}>保管</Button>
