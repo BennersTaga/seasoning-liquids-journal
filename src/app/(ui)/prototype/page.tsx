@@ -840,20 +840,23 @@ function Floor({
         store_location: m.store_location ?? "",
         source: "entered" as const,
       }));
+      const basePayload = {
+        packs: Math.max(0, report.packs),
+        grams: report.grams,
+        manufactured_at: report.manufacturedAt,
+        result: report.result,
+        leftover: leftoverPayload,
+      };
+      const finalPayload = materialsPayload.length
+        ? { ...basePayload, materials: materialsPayload }
+        : basePayload;
       try {
         await apiPost("action", {
           type: "MADE_SPLIT",
           factory_code: order.factoryCode,
           lot_id: order.lotId,
           flavor_id: line.flavorId,
-          payload: {
-            packs: Math.max(0, report.packs),
-            grams: report.grams,
-            manufactured_at: report.manufacturedAt,
-            result: report.result,
-            leftover: leftoverPayload,
-            materials: materialsPayload,
-          },
+          payload: finalPayload,
         });
         await Promise.all([
           mutate(["orders", order.factoryCode, false]),
@@ -1288,22 +1291,23 @@ function MadeDialog2({
       outcome === "extra" && leftGrams > 0 && leftLoc
         ? { location: leftLoc, grams: leftGrams }
         : null;
-    const materials: MaterialLine[] = flavor.recipe
-      .map(r => {
+    const materials = flavor.recipe
+      .map((r): MaterialLine | null => {
         const raw = reported[r.ingredient] ?? "";
         const n = Number.parseFloat(String(raw).replace(/,/g, ""));
-        return Number.isFinite(n) && n > 0
-          ? {
-              ingredient_id: "",
-              ingredient_name: r.ingredient,
-              reported_qty: n,
-              unit: (r.unit ?? "g") || "g",
-              store_location: "",
-              source: "entered",
-            }
-          : null;
+        if (Number.isFinite(n) && n > 0) {
+          return {
+            ingredient_id: "",
+            ingredient_name: r.ingredient,
+            reported_qty: n,
+            unit: r.unit ?? "g",
+            store_location: "",
+            source: "entered",
+          };
+        }
+        return null;
       })
-      .filter((x): x is MaterialLine => !!x);
+      .filter((m): m is MaterialLine => m !== null);
     try {
       setSubmitting(true);
       await onReport({
@@ -1434,7 +1438,6 @@ function MadeDialog2({
           <Button variant="secondary" onClick={onClose}>キャンセル</Button>
           <Button
             disabled={
-              !allChecked ||
               !manufacturedAt ||
               submitting ||
               (showPackInput && (packsMade <= 0 || tooMuch)) ||
