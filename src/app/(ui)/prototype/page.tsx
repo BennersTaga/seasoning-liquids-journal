@@ -12,15 +12,24 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Package, Warehouse, Archive, Beaker, Factory, Trash2, Boxes, ChefHat } from "lucide-react";
 import { format } from "date-fns";
-import useSWR, { mutate } from "swr";
+import { mutate } from "swr";
 
-import { apiGet, apiPost } from "@/lib/gas";
+import { apiPost } from "@/lib/gas";
 import { useMasters } from "@/hooks/useMasters";
 import { useOrders } from "@/hooks/useOrders";
 import { useStorageAgg } from "@/hooks/useStorageAgg";
 import type { Masters, OrderRow, StorageAggRow } from "@/lib/sheets/types";
 
 type FlavorRecipeItem = { ingredient: string; qty: number; unit: string };
+
+type MaterialLine = {
+  ingredient_id?: string;
+  ingredient_name: string;
+  reported_qty: number;
+  unit?: string;
+  store_location?: string;
+  source?: "entered";
+};
 
 interface FlavorWithRecipe {
   id: string;
@@ -67,6 +76,7 @@ type MadeReport = {
   manufacturedAt: string;
   result: "extra" | "used";
   leftover?: { location: string; grams: number } | null;
+  materials?: MaterialLine[];
 };
 
 type KeepFormValues = { location: string; grams: number; manufacturedAt: string };
@@ -822,19 +832,31 @@ function Floor({
       const leftoverPayload = report.leftover && report.leftover.grams > 0
         ? { location: report.leftover.location, grams: report.leftover.grams }
         : null;
+      const materialsPayload = (report.materials ?? []).map(m => ({
+        ingredient_id: m.ingredient_id ?? "",
+        ingredient_name: m.ingredient_name,
+        reported_qty: Number(m.reported_qty),
+        unit: m.unit ?? "g",
+        store_location: m.store_location ?? "",
+        source: "entered" as const,
+      }));
+      const basePayload = {
+        packs: Math.max(0, report.packs),
+        grams: report.grams,
+        manufactured_at: report.manufacturedAt,
+        result: report.result,
+        leftover: leftoverPayload,
+      };
+      const finalPayload = materialsPayload.length
+        ? { ...basePayload, materials: materialsPayload }
+        : basePayload;
       try {
         await apiPost("action", {
           type: "MADE_SPLIT",
           factory_code: order.factoryCode,
           lot_id: order.lotId,
           flavor_id: line.flavorId,
-          payload: {
-            packs: Math.max(0, report.packs),
-            grams: report.grams,
-            manufactured_at: report.manufacturedAt,
-            result: report.result,
-            leftover: leftoverPayload,
-          },
+          payload: finalPayload,
         });
         await Promise.all([
           mutate(["orders", order.factoryCode, false]),
@@ -1231,8 +1253,7 @@ function MadeDialog2({
   storageByFactory: Record<string, string[]>;
   mastersLoading: boolean;
 }) {
-  const [checked, setChecked] = useState<Record<string, boolean>>({});
-  const [recipeQty, setRecipeQty] = useState<Record<string, number>>({});
+  const [reported, setReported] = useState<Record<string, string>>({});
   const [manufacturedAt, setManufacturedAt] = useState(format(new Date(), "yyyy-MM-dd"));
   const [outcome, setOutcome] = useState<"extra" | "used" | "">("");
   const [leftLoc, setLeftLoc] = useState("");
@@ -1246,12 +1267,7 @@ function MadeDialog2({
 
   useEffect(() => {
     if (open) {
-      const init: Record<string, number> = {};
-      flavor.recipe.forEach(r => {
-        init[r.ingredient] = r.qty;
-      });
-      setRecipeQty(init);
-      setChecked({});
+      setReported({});
       setOutcome("");
       setLeftLoc("");
       setLeftGrams(0);
@@ -1262,8 +1278,6 @@ function MadeDialog2({
       setPacksMade(def);
     }
   }, [open, flavor, line.packs, mode, remaining, showPackInput]);
-
-  const allChecked = flavor.recipe.every(r => checked[r.ingredient]);
   const tooMuch = showPackInput && packsMade > Math.max(0, remaining);
 
   const submit = async () => {
@@ -1277,6 +1291,23 @@ function MadeDialog2({
       outcome === "extra" && leftGrams > 0 && leftLoc
         ? { location: leftLoc, grams: leftGrams }
         : null;
+    const materials = flavor.recipe
+      .map((r): MaterialLine | null => {
+        const raw = reported[r.ingredient] ?? "";
+        const n = Number.parseFloat(String(raw).replace(/,/g, ""));
+        if (Number.isFinite(n) && n > 0) {
+          return {
+            ingredient_id: "",
+            ingredient_name: r.ingredient,
+            reported_qty: n,
+            unit: r.unit ?? "g",
+            store_location: "",
+            source: "entered",
+          };
+        }
+        return null;
+      })
+      .filter((m): m is MaterialLine => m !== null);
     try {
       setSubmitting(true);
       await onReport({
@@ -1285,6 +1316,7 @@ function MadeDialog2({
         manufacturedAt,
         result: outcome,
         leftover: leftoverPayload,
+        materials,
       });
       onClose();
     } catch {
@@ -1304,22 +1336,26 @@ function MadeDialog2({
           <div className="text-sm font-medium">レシピ：{flavor.liquidName}</div>
           {flavor.recipe.map((r, idx) => (
             <div key={idx} className="flex items-center justify-between gap-3 px-1">
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id={`mk-${idx}`}
-                  checked={!!checked[r.ingredient]}
-                  onCheckedChange={v => setChecked(prev => ({ ...prev, [r.ingredient]: Boolean(v) }))}
-                />
-                <Label htmlFor={`mk-${idx}`}>{r.ingredient}</Label>
+              <div className="flex flex-col gap-1">
+                <Label className="text-sm font-medium">{r.ingredient}</Label>
+                <span className="text-xs text-muted-foreground">
+                  目安 {formatNumber(r.qty)} {r.unit ?? "g"}
+                </span>
               </div>
               <div className="flex items-center gap-2">
                 <Input
                   className="w-24"
                   type="number"
-                  value={recipeQty[r.ingredient] ?? r.qty}
-                  onChange={e => setRecipeQty(prev => ({ ...prev, [r.ingredient]: Number.parseInt(e.target.value || "0", 10) }))}
+                  value={reported[r.ingredient] ?? ""}
+                  onChange={e =>
+                    setReported(prev => ({
+                      ...prev,
+                      [r.ingredient]: e.target.value,
+                    }))
+                  }
+                  placeholder={String(r.qty)}
                 />
-                <span className="text-sm opacity-80">{r.unit}</span>
+                <span className="text-sm opacity-80">{r.unit ?? "g"}</span>
               </div>
             </div>
           ))}
@@ -1402,7 +1438,6 @@ function MadeDialog2({
           <Button variant="secondary" onClick={onClose}>キャンセル</Button>
           <Button
             disabled={
-              !allChecked ||
               !manufacturedAt ||
               submitting ||
               (showPackInput && (packsMade <= 0 || tooMuch)) ||
