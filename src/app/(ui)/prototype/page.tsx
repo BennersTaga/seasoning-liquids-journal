@@ -1253,7 +1253,10 @@ function MadeDialog2({
   storageByFactory: Record<string, string[]>;
   mastersLoading: boolean;
 }) {
+  // 復活：チェックボックス＋目安＋初期値
+  const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [reported, setReported] = useState<Record<string, string>>({});
+  const [expected, setExpected] = useState<Record<string, number>>({});
   const [manufacturedAt, setManufacturedAt] = useState(format(new Date(), "yyyy-MM-dd"));
   const [outcome, setOutcome] = useState<"extra" | "used" | "">("");
   const [leftLoc, setLeftLoc] = useState("");
@@ -1267,7 +1270,9 @@ function MadeDialog2({
 
   useEffect(() => {
     if (open) {
+      setChecked({});
       setReported({});
+      setExpected({});
       setOutcome("");
       setLeftLoc("");
       setLeftGrams(0);
@@ -1278,36 +1283,61 @@ function MadeDialog2({
       setPacksMade(def);
     }
   }, [open, flavor, line.packs, mode, remaining, showPackInput]);
+
   const tooMuch = showPackInput && packsMade > Math.max(0, remaining);
+
+  const grams = showPackInput
+    ? packsMade * (flavor.packToGram ?? 0)
+    : line.oemGrams ?? line.requiredGrams;
+
+  // 目安（理論値）と reported の初期値を作成量から按分して計算
+  useEffect(() => {
+    if (!open) return;
+    const sum = flavor.recipe.reduce((total, r) => total + (r.qty || 0), 0);
+    const exp: Record<string, number> = {};
+    const initChecked: Record<string, boolean> = {};
+    const initReported: Record<string, string> = {};
+    flavor.recipe.forEach(r => {
+      const key = r.ingredient;
+      const value = sum > 0 ? Math.round(grams * ((r.qty || 0) / sum)) : 0;
+      exp[key] = value;
+      initChecked[key] = true; // 初期は全選択
+      initReported[key] = value > 0 ? String(value) : "";
+    });
+    setExpected(exp);
+    setChecked(initChecked);
+    setReported(initReported);
+  }, [open, flavor.recipe, grams]);
 
   const submit = async () => {
     if (showPackInput && (packsMade <= 0 || tooMuch)) return;
     if (outcome !== "extra" && outcome !== "used") return;
     const packsValue = showPackInput ? packsMade : 0;
-    const gramsValue = showPackInput
-      ? packsMade * (flavor.packToGram ?? 0)
-      : line.requiredGrams;
+    const gramsValue = grams;
     const leftoverPayload =
       outcome === "extra" && leftGrams > 0 && leftLoc
         ? { location: leftLoc, grams: leftGrams }
         : null;
-    const materials = flavor.recipe
+
+    // checked かつ >0 の行のみ採用。null は返さず型ガードで MaterialLine[] に。
+    const materials: MaterialLine[] = flavor.recipe
       .map((r): MaterialLine | null => {
-        const raw = reported[r.ingredient] ?? "";
+        const key = r.ingredient;
+        if (!checked[key]) return null;
+        const raw = reported[key] ?? "";
         const n = Number.parseFloat(String(raw).replace(/,/g, ""));
-        if (Number.isFinite(n) && n > 0) {
-          return {
-            ingredient_id: "",
-            ingredient_name: r.ingredient,
-            reported_qty: n,
-            unit: r.unit ?? "g",
-            store_location: "",
-            source: "entered",
-          };
-        }
-        return null;
+        if (!Number.isFinite(n) || n <= 0) return null;
+        return {
+          ingredient_id: "",
+          ingredient_name: key,
+          reported_qty: n,
+          unit: "g",
+          store_location: "",
+          source: "entered",
+        };
       })
       .filter((m): m is MaterialLine => m !== null);
+
     try {
       setSubmitting(true);
       await onReport({
@@ -1334,31 +1364,47 @@ function MadeDialog2({
         </DialogHeader>
         <div className="rounded-xl border p-3 space-y-3">
           <div className="text-sm font-medium">レシピ：{flavor.liquidName}</div>
-          {flavor.recipe.map((r, idx) => (
-            <div key={idx} className="flex items-center justify-between gap-3 px-1">
-              <div className="flex flex-col gap-1">
-                <Label className="text-sm font-medium">{r.ingredient}</Label>
-                <span className="text-xs text-muted-foreground">
-                  目安 {formatNumber(r.qty)} {r.unit ?? "g"}
-                </span>
+          {flavor.recipe.map(r => {
+            const key = r.ingredient;
+            return (
+              <div key={key} className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-2">
+                  <Checkbox
+                    checked={!!checked[key]}
+                    onCheckedChange={value =>
+                      setChecked(prev => ({
+                        ...prev,
+                        [key]: Boolean(value),
+                      }))
+                    }
+                  />
+                  <div>
+                    <div className="text-sm font-medium">{key}</div>
+                    <div className="text-xs text-muted-foreground">
+                      目安 {expected[key]?.toLocaleString?.() ?? 0} g
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    className="w-28 text-right"
+                    type="number"
+                    inputMode="decimal"
+                    disabled={!checked[key]}
+                    value={reported[key] ?? ""}
+                    onChange={e => {
+                      const raw = e.target.value ?? "";
+                      setReported(prev => ({
+                        ...prev,
+                        [key]: raw,
+                      }));
+                    }}
+                  />
+                  <span className="text-sm text-muted-foreground">g</span>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <Input
-                  className="w-24"
-                  type="number"
-                  value={reported[r.ingredient] ?? ""}
-                  onChange={e =>
-                    setReported(prev => ({
-                      ...prev,
-                      [r.ingredient]: e.target.value,
-                    }))
-                  }
-                  placeholder={String(r.qty)}
-                />
-                <span className="text-sm opacity-80">{r.unit ?? "g"}</span>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
         {showPackInput ? (
           <div className="grid md:grid-cols-3 gap-3 bg-muted/30 rounded-md p-3 items-end">
@@ -1580,25 +1626,6 @@ function OnsiteMakeDialog({
             <Input type="date" value={manufacturedAt} onChange={e => setManufacturedAt(e.target.value)} />
           </div>
         </div>
-        {useType === "oem" && (
-          <div>
-            <Label>OEM先</Label>
-            <Select value={oemPartner} onValueChange={setOemPartner}>
-              <SelectTrigger disabled={oemDisabled}>
-                <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
-              </SelectTrigger>
-              <SelectContent>
-                {oemList.length
-                  ? oemList.map(x => (
-                      <SelectItem key={x} value={x}>
-                        {x}
-                      </SelectItem>
-                    ))
-                  : selectFallback(mastersLoading)}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
         <div className="rounded-xl border p-3 space-y-3">
           <div className="text-sm font-medium">レシピ：{flavor.liquidName}</div>
           {flavor.recipe.map((r, idx) => (
