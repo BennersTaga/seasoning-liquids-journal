@@ -12,15 +12,24 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Package, Warehouse, Archive, Beaker, Factory, Trash2, Boxes, ChefHat } from "lucide-react";
 import { format } from "date-fns";
-import useSWR, { mutate } from "swr";
+import { mutate } from "swr";
 
-import { apiGet, apiPost } from "@/lib/gas";
+import { apiPost } from "@/lib/gas";
 import { useMasters } from "@/hooks/useMasters";
 import { useOrders } from "@/hooks/useOrders";
 import { useStorageAgg } from "@/hooks/useStorageAgg";
 import type { Masters, OrderRow, StorageAggRow } from "@/lib/sheets/types";
 
 type FlavorRecipeItem = { ingredient: string; qty: number; unit: string };
+
+type MaterialLine = {
+  ingredient_id?: string;
+  ingredient_name: string;
+  reported_qty: number;
+  unit?: string;
+  store_location?: string;
+  source?: "entered";
+};
 
 interface FlavorWithRecipe {
   id: string;
@@ -67,6 +76,7 @@ type MadeReport = {
   manufacturedAt: string;
   result: "extra" | "used";
   leftover?: { location: string; grams: number } | null;
+  materials?: MaterialLine[];
 };
 
 type KeepFormValues = { location: string; grams: number; manufacturedAt: string };
@@ -155,29 +165,38 @@ function deriveDataFromMasters(masters?: Masters) {
 function normalizeOrders(rows?: OrderRow[]): OrderCard[] {
   if (!rows?.length) return [];
   const map = new Map<string, OrderCard>();
+
   rows.forEach(row => {
     const useTypeRaw = String(row.use_type ?? "").trim().toLowerCase();
     const isOem = useTypeRaw === "oem";
+
+    const packsNum = Number(row.packs);
+    const packsRemainingNum = Number(row.packs_remaining);
+    const requiredGramsNum = Number(row.required_grams);
+
     const line: OrderLine = isOem
       ? {
           flavorId: row.flavor_id,
           packs: 0,
-          requiredGrams: row.required_grams,
+          requiredGrams: Number.isFinite(requiredGramsNum) ? requiredGramsNum : 0,
           useType: "oem",
           useCode: row.use_code ?? undefined,
           oemPartner: row.oem_partner ?? undefined,
-          oemGrams: row.required_grams,
+          oemGrams: Number.isFinite(requiredGramsNum) ? requiredGramsNum : 0,
         }
       : {
           flavorId: row.flavor_id,
-          packs: Number.isFinite(row.packs as number)
-            ? (row.packs as number)
-            : 0,
-          packsRemaining: row.packs_remaining ?? undefined,
-          requiredGrams: row.required_grams,
+          packs: Number.isFinite(packsNum) ? packsNum : 0,
+          packsRemaining: Number.isFinite(packsRemainingNum)
+            ? packsRemainingNum
+            : Number.isFinite(packsNum)
+              ? packsNum
+              : 0,
+          requiredGrams: Number.isFinite(requiredGramsNum) ? requiredGramsNum : 0,
           useType: "fissule",
           useCode: row.use_code ?? undefined,
         };
+
     const existing = map.get(row.order_id);
     if (existing) {
       existing.lines.push(line);
@@ -193,6 +212,7 @@ function normalizeOrders(rows?: OrderRow[]): OrderCard[] {
       });
     }
   });
+
   return Array.from(map.values());
 }
 
@@ -696,9 +716,9 @@ function Office({
                       </Field>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <Field label={ln.useType === "fissule" ? "パック数" : "OEM先"}>
+                      <Field label={ln.useType === "fissule" ? "残りパック数" : "OEM先"}>
                         {ln.useType === "fissule"
-                          ? formatPacks(ln.packs)
+                          ? formatPacks(ln.packsRemaining ?? ln.packs ?? 0)
                           : ln.oemPartner ?? "-"}
                       </Field>
                       <Field label="必要量">
@@ -822,19 +842,31 @@ function Floor({
       const leftoverPayload = report.leftover && report.leftover.grams > 0
         ? { location: report.leftover.location, grams: report.leftover.grams }
         : null;
+      const materialsPayload = (report.materials ?? []).map(m => ({
+        ingredient_id: m.ingredient_id ?? "",
+        ingredient_name: m.ingredient_name,
+        reported_qty: Number(m.reported_qty),
+        unit: m.unit ?? "g",
+        store_location: m.store_location ?? "",
+        source: "entered" as const,
+      }));
+      const basePayload = {
+        packs: Math.max(0, report.packs),
+        grams: report.grams,
+        manufactured_at: report.manufacturedAt,
+        result: report.result,
+        leftover: leftoverPayload,
+      };
+      const finalPayload = materialsPayload.length
+        ? { ...basePayload, materials: materialsPayload }
+        : basePayload;
       try {
         await apiPost("action", {
           type: "MADE_SPLIT",
           factory_code: order.factoryCode,
           lot_id: order.lotId,
           flavor_id: line.flavorId,
-          payload: {
-            packs: Math.max(0, report.packs),
-            grams: report.grams,
-            manufactured_at: report.manufacturedAt,
-            result: report.result,
-            leftover: leftoverPayload,
-          },
+          payload: finalPayload,
         });
         await Promise.all([
           mutate(["orders", order.factoryCode, false]),
@@ -1016,9 +1048,9 @@ function OrderCardView({
             </Field>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Field label={line.useType === "fissule" ? "パック数" : "OEM先"}>
+            <Field label={line.useType === "fissule" ? "残りパック数" : "OEM先"}>
               {line.useType === "fissule"
-                ? formatPacks(line.packs ?? 0)
+                ? formatPacks(remainingPacks)
                 : line.oemPartner ?? "-"}
             </Field>
             <Field label="必要量">
@@ -1232,7 +1264,8 @@ function MadeDialog2({
   mastersLoading: boolean;
 }) {
   const [checked, setChecked] = useState<Record<string, boolean>>({});
-  const [recipeQty, setRecipeQty] = useState<Record<string, number>>({});
+  const [reported, setReported] = useState<Record<string, string>>({});
+  const [expected, setExpected] = useState<Record<string, number>>({});
   const [manufacturedAt, setManufacturedAt] = useState(format(new Date(), "yyyy-MM-dd"));
   const [outcome, setOutcome] = useState<"extra" | "used" | "">("");
   const [leftLoc, setLeftLoc] = useState("");
@@ -1246,12 +1279,9 @@ function MadeDialog2({
 
   useEffect(() => {
     if (open) {
-      const init: Record<string, number> = {};
-      flavor.recipe.forEach(r => {
-        init[r.ingredient] = r.qty;
-      });
-      setRecipeQty(init);
       setChecked({});
+      setReported({});
+      setExpected({});
       setOutcome("");
       setLeftLoc("");
       setLeftGrams(0);
@@ -1262,21 +1292,56 @@ function MadeDialog2({
       setPacksMade(def);
     }
   }, [open, flavor, line.packs, mode, remaining, showPackInput]);
-
-  const allChecked = flavor.recipe.every(r => checked[r.ingredient]);
   const tooMuch = showPackInput && packsMade > Math.max(0, remaining);
+
+  const grams = showPackInput
+    ? packsMade * (flavor.packToGram ?? 0)
+    : line.oemGrams ?? line.requiredGrams;
+
+  useEffect(() => {
+    if (!open) return;
+    const sum = flavor.recipe.reduce((total, r) => total + (r.qty || 0), 0);
+    const exp: Record<string, number> = {};
+    const initChecked: Record<string, boolean> = {};
+    const initReported: Record<string, string> = {};
+    flavor.recipe.forEach(r => {
+      const key = r.ingredient;
+      const value = sum > 0 ? Math.round(grams * ((r.qty || 0) / sum)) : 0;
+      exp[key] = value;
+      initChecked[key] = false;
+      initReported[key] = value > 0 ? String(value) : "";
+    });
+    setExpected(exp);
+    setChecked(initChecked);
+    setReported(initReported);
+  }, [open, flavor.recipe, grams]);
 
   const submit = async () => {
     if (showPackInput && (packsMade <= 0 || tooMuch)) return;
     if (outcome !== "extra" && outcome !== "used") return;
     const packsValue = showPackInput ? packsMade : 0;
-    const gramsValue = showPackInput
-      ? packsMade * (flavor.packToGram ?? 0)
-      : line.requiredGrams;
+    const gramsValue = grams;
     const leftoverPayload =
       outcome === "extra" && leftGrams > 0 && leftLoc
         ? { location: leftLoc, grams: leftGrams }
         : null;
+    const materials = flavor.recipe
+      .map((r): MaterialLine | null => {
+        const key = r.ingredient;
+        if (!checked[key]) return null;
+        const raw = reported[key] ?? "";
+        const n = Number.parseFloat(String(raw).replace(/,/g, ""));
+        if (!Number.isFinite(n) || n <= 0) return null;
+        return {
+          ingredient_id: "",
+          ingredient_name: key,
+          reported_qty: n,
+          unit: "g",
+          store_location: "",
+          source: "entered",
+        } satisfies MaterialLine;
+      })
+      .filter((m): m is MaterialLine => m !== null);
     try {
       setSubmitting(true);
       await onReport({
@@ -1285,6 +1350,7 @@ function MadeDialog2({
         manufacturedAt,
         result: outcome,
         leftover: leftoverPayload,
+        materials,
       });
       onClose();
     } catch {
@@ -1302,27 +1368,47 @@ function MadeDialog2({
         </DialogHeader>
         <div className="rounded-xl border p-3 space-y-3">
           <div className="text-sm font-medium">レシピ：{flavor.liquidName}</div>
-          {flavor.recipe.map((r, idx) => (
-            <div key={idx} className="flex items-center justify-between gap-3 px-1">
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id={`mk-${idx}`}
-                  checked={!!checked[r.ingredient]}
-                  onCheckedChange={v => setChecked(prev => ({ ...prev, [r.ingredient]: Boolean(v) }))}
-                />
-                <Label htmlFor={`mk-${idx}`}>{r.ingredient}</Label>
+          {flavor.recipe.map(r => {
+            const key = r.ingredient;
+            return (
+              <div key={key} className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-2">
+                  <Checkbox
+                    checked={!!checked[key]}
+                    onCheckedChange={value =>
+                      setChecked(prev => ({
+                        ...prev,
+                        [key]: Boolean(value),
+                      }))
+                    }
+                  />
+                  <div>
+                    <div className="text-sm font-medium">{key}</div>
+                    <div className="text-xs text-muted-foreground">
+                      目安 {expected[key]?.toLocaleString?.() ?? 0} g
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    className="w-28 text-right"
+                    type="number"
+                    inputMode="decimal"
+                    disabled={!checked[key]}
+                    value={reported[key] ?? ""}
+                    onChange={e => {
+                      const raw = e.target.value ?? "";
+                      setReported(prev => ({
+                        ...prev,
+                        [key]: raw,
+                      }));
+                    }}
+                  />
+                  <span className="text-sm text-muted-foreground">g</span>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <Input
-                  className="w-24"
-                  type="number"
-                  value={recipeQty[r.ingredient] ?? r.qty}
-                  onChange={e => setRecipeQty(prev => ({ ...prev, [r.ingredient]: Number.parseInt(e.target.value || "0", 10) }))}
-                />
-                <span className="text-sm opacity-80">{r.unit}</span>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
         {showPackInput ? (
           <div className="grid md:grid-cols-3 gap-3 bg-muted/30 rounded-md p-3 items-end">
@@ -1402,7 +1488,6 @@ function MadeDialog2({
           <Button variant="secondary" onClick={onClose}>キャンセル</Button>
           <Button
             disabled={
-              !allChecked ||
               !manufacturedAt ||
               submitting ||
               (showPackInput && (packsMade <= 0 || tooMuch)) ||
