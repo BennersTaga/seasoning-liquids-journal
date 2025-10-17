@@ -1263,6 +1263,7 @@ function MadeDialog2({
   storageByFactory: Record<string, string[]>;
   mastersLoading: boolean;
 }) {
+  // 復活：チェックボックス＋目安＋初期値
   const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [reported, setReported] = useState<Record<string, string>>({});
   const [expected, setExpected] = useState<Record<string, number>>({});
@@ -1292,12 +1293,14 @@ function MadeDialog2({
       setPacksMade(def);
     }
   }, [open, flavor, line.packs, mode, remaining, showPackInput]);
+
   const tooMuch = showPackInput && packsMade > Math.max(0, remaining);
 
   const grams = showPackInput
     ? packsMade * (flavor.packToGram ?? 0)
     : line.oemGrams ?? line.requiredGrams;
 
+  // 目安（理論値）と reported の初期値を作成量から按分して計算
   useEffect(() => {
     if (!open) return;
     const sum = flavor.recipe.reduce((total, r) => total + (r.qty || 0), 0);
@@ -1308,6 +1311,7 @@ function MadeDialog2({
       const key = r.ingredient;
       const value = sum > 0 ? Math.round(grams * ((r.qty || 0) / sum)) : 0;
       exp[key] = value;
+      // 初期状態：未チェック（現場が意識的にチェックを入れる）
       initChecked[key] = false;
       initReported[key] = value > 0 ? String(value) : "";
     });
@@ -1325,7 +1329,9 @@ function MadeDialog2({
       outcome === "extra" && leftGrams > 0 && leftLoc
         ? { location: leftLoc, grams: leftGrams }
         : null;
-    const materials = flavor.recipe
+
+    // checked かつ >0 の行のみ採用。null は返さず型ガードで MaterialLine[] に。
+    const materials: MaterialLine[] = flavor.recipe
       .map((r): MaterialLine | null => {
         const key = r.ingredient;
         if (!checked[key]) return null;
@@ -1339,9 +1345,10 @@ function MadeDialog2({
           unit: "g",
           store_location: "",
           source: "entered",
-        } satisfies MaterialLine;
+        };
       })
       .filter((m): m is MaterialLine => m !== null);
+
     try {
       setSubmitting(true);
       await onReport({
@@ -1630,25 +1637,6 @@ function OnsiteMakeDialog({
             <Input type="date" value={manufacturedAt} onChange={e => setManufacturedAt(e.target.value)} />
           </div>
         </div>
-        {useType === "oem" && (
-          <div>
-            <Label>OEM先</Label>
-            <Select value={oemPartner} onValueChange={setOemPartner}>
-              <SelectTrigger disabled={oemDisabled}>
-                <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
-              </SelectTrigger>
-              <SelectContent>
-                {oemList.length
-                  ? oemList.map(x => (
-                      <SelectItem key={x} value={x}>
-                        {x}
-                      </SelectItem>
-                    ))
-                  : selectFallback(mastersLoading)}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
         <div className="rounded-xl border p-3 space-y-3">
           <div className="text-sm font-medium">レシピ：{flavor.liquidName}</div>
           {flavor.recipe.map((r, idx) => (
@@ -1900,71 +1888,6 @@ function StorageCardView({
           <DialogHeader>
             <DialogTitle>在庫の使用</DialogTitle>
           </DialogHeader>
-          <div className="grid gap-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>使用量（g）</Label>
-                <Input
-                  type="number"
-                  value={useQty}
-                  onChange={e => setUseQty(Number.parseInt(e.target.value || "0", 10))}
-                />
-              </div>
-              <div>
-                <Label>結果</Label>
-                <Select value={useOutcome} onValueChange={(value: "extra" | "none" | "shortage") => setUseOutcome(value)}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="選択" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="extra">余った</SelectItem>
-                    <SelectItem value="none">余らず</SelectItem>
-                    <SelectItem value="shortage">不足</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            {useOutcome === "extra" && (
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label>余り数量（g）</Label>
-                  <Input
-                    type="number"
-                    value={leftQty}
-                    onChange={e => setLeftQty(Number.parseInt(e.target.value || "0", 10))}
-                  />
-                </div>
-                <div>
-                  <Label>保管場所</Label>
-                  <Select value={loc} onValueChange={setLoc}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {agg.locations.map(l => (
-                        <SelectItem key={l} value={l}>
-                          {l}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setUseOpen(false)}>キャンセル</Button>
-            <Button
-              disabled={
-                useLoading ||
-                useQty <= 0 ||
-                (useOutcome === "extra" && (leftQty <= 0 || !effectiveLocation(loc)))
-              }
-              onClick={handleUse}
-            >
-              登録
-            </Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
       <Dialog open={wasteOpen} onOpenChange={setWasteOpen}>
