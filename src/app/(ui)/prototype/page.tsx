@@ -165,29 +165,38 @@ function deriveDataFromMasters(masters?: Masters) {
 function normalizeOrders(rows?: OrderRow[]): OrderCard[] {
   if (!rows?.length) return [];
   const map = new Map<string, OrderCard>();
+
   rows.forEach(row => {
     const useTypeRaw = String(row.use_type ?? "").trim().toLowerCase();
     const isOem = useTypeRaw === "oem";
+
+    const packsNum = Number(row.packs);
+    const packsRemainingNum = Number(row.packs_remaining);
+    const requiredGramsNum = Number(row.required_grams);
+
     const line: OrderLine = isOem
       ? {
           flavorId: row.flavor_id,
           packs: 0,
-          requiredGrams: row.required_grams,
+          requiredGrams: Number.isFinite(requiredGramsNum) ? requiredGramsNum : 0,
           useType: "oem",
           useCode: row.use_code ?? undefined,
           oemPartner: row.oem_partner ?? undefined,
-          oemGrams: row.required_grams,
+          oemGrams: Number.isFinite(requiredGramsNum) ? requiredGramsNum : 0,
         }
       : {
           flavorId: row.flavor_id,
-          packs: Number.isFinite(row.packs as number)
-            ? (row.packs as number)
-            : 0,
-          packsRemaining: row.packs_remaining ?? undefined,
-          requiredGrams: row.required_grams,
+          packs: Number.isFinite(packsNum) ? packsNum : 0,
+          packsRemaining: Number.isFinite(packsRemainingNum)
+            ? packsRemainingNum
+            : Number.isFinite(packsNum)
+              ? packsNum
+              : 0,
+          requiredGrams: Number.isFinite(requiredGramsNum) ? requiredGramsNum : 0,
           useType: "fissule",
           useCode: row.use_code ?? undefined,
         };
+
     const existing = map.get(row.order_id);
     if (existing) {
       existing.lines.push(line);
@@ -203,6 +212,7 @@ function normalizeOrders(rows?: OrderRow[]): OrderCard[] {
       });
     }
   });
+
   return Array.from(map.values());
 }
 
@@ -1301,7 +1311,8 @@ function MadeDialog2({
       const key = r.ingredient;
       const value = sum > 0 ? Math.round(grams * ((r.qty || 0) / sum)) : 0;
       exp[key] = value;
-      initChecked[key] = true; // 初期は全選択
+      // 初期状態：未チェック（現場が意識的にチェックを入れる）
+      initChecked[key] = false;
       initReported[key] = value > 0 ? String(value) : "";
     });
     setExpected(exp);
@@ -1877,71 +1888,6 @@ function StorageCardView({
           <DialogHeader>
             <DialogTitle>在庫の使用</DialogTitle>
           </DialogHeader>
-          <div className="grid gap-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>使用量（g）</Label>
-                <Input
-                  type="number"
-                  value={useQty}
-                  onChange={e => setUseQty(Number.parseInt(e.target.value || "0", 10))}
-                />
-              </div>
-              <div>
-                <Label>結果</Label>
-                <Select value={useOutcome} onValueChange={(value: "extra" | "none" | "shortage") => setUseOutcome(value)}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="選択" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="extra">余った</SelectItem>
-                    <SelectItem value="none">余らず</SelectItem>
-                    <SelectItem value="shortage">不足</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            {useOutcome === "extra" && (
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label>余り数量（g）</Label>
-                  <Input
-                    type="number"
-                    value={leftQty}
-                    onChange={e => setLeftQty(Number.parseInt(e.target.value || "0", 10))}
-                  />
-                </div>
-                <div>
-                  <Label>保管場所</Label>
-                  <Select value={loc} onValueChange={setLoc}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {agg.locations.map(l => (
-                        <SelectItem key={l} value={l}>
-                          {l}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setUseOpen(false)}>キャンセル</Button>
-            <Button
-              disabled={
-                useLoading ||
-                useQty <= 0 ||
-                (useOutcome === "extra" && (leftQty <= 0 || !effectiveLocation(loc)))
-              }
-              onClick={handleUse}
-            >
-              登録
-            </Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
       <Dialog open={wasteOpen} onOpenChange={setWasteOpen}>
