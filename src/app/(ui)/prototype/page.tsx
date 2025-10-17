@@ -716,9 +716,9 @@ function Office({
                       </Field>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <Field label={ln.useType === "fissule" ? "パック数" : "OEM先"}>
+                      <Field label={ln.useType === "fissule" ? "残りパック数" : "OEM先"}>
                         {ln.useType === "fissule"
-                          ? formatPacks(ln.packs)
+                          ? formatPacks(ln.packsRemaining ?? ln.packs ?? 0)
                           : ln.oemPartner ?? "-"}
                       </Field>
                       <Field label="必要量">
@@ -1048,9 +1048,9 @@ function OrderCardView({
             </Field>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Field label={line.useType === "fissule" ? "パック数" : "OEM先"}>
+            <Field label={line.useType === "fissule" ? "残りパック数" : "OEM先"}>
               {line.useType === "fissule"
-                ? formatPacks(line.packs ?? 0)
+                ? formatPacks(remainingPacks)
                 : line.oemPartner ?? "-"}
             </Field>
             <Field label="必要量">
@@ -1888,6 +1888,71 @@ function StorageCardView({
           <DialogHeader>
             <DialogTitle>在庫の使用</DialogTitle>
           </DialogHeader>
+          <div className="grid gap-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>使用量（g）</Label>
+                <Input
+                  type="number"
+                  value={useQty}
+                  onChange={e => setUseQty(Number.parseInt(e.target.value || "0", 10))}
+                />
+              </div>
+              <div>
+                <Label>結果</Label>
+                <Select value={useOutcome} onValueChange={(value: "extra" | "none" | "shortage") => setUseOutcome(value)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="選択" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="extra">余った</SelectItem>
+                    <SelectItem value="none">余らず</SelectItem>
+                    <SelectItem value="shortage">不足</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {useOutcome === "extra" && (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>余り数量（g）</Label>
+                  <Input
+                    type="number"
+                    value={leftQty}
+                    onChange={e => setLeftQty(Number.parseInt(e.target.value || "0", 10))}
+                  />
+                </div>
+                <div>
+                  <Label>保管場所</Label>
+                  <Select value={loc} onValueChange={setLoc}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {agg.locations.map(l => (
+                        <SelectItem key={l} value={l}>
+                          {l}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setUseOpen(false)}>キャンセル</Button>
+            <Button
+              disabled={
+                useLoading ||
+                useQty <= 0 ||
+                (useOutcome === "extra" && (leftQty <= 0 || !effectiveLocation(loc)))
+              }
+              onClick={handleUse}
+            >
+              登録
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
       <Dialog open={wasteOpen} onOpenChange={setWasteOpen}>
