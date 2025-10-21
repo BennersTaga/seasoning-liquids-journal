@@ -45,12 +45,14 @@ export interface StorageAggRow {
 }
 
 export interface ActionBody {
-  path: 'action';
-  type: 'KEEP'|'USE'|'WASTE'|'MADE_SPLIT';
+  path: 'action' | 'onsite-make' | 'orders-create';
+  type?: 'KEEP' | 'USE' | 'WASTE' | 'MADE_SPLIT';
   factory_code: string;
-  lot_id: string;
-  flavor_id: string;
-  payload: Record<string, unknown>;
+  lot_id?: string;
+  flavor_id?: string;
+  payload?: Record<string, unknown>;
+  /** 冪等キー（クライアント生成UUID） */
+  request_id?: string;
 }
 
 export interface MadeSummaryItem {
