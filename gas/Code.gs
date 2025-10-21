@@ -1,6 +1,7 @@
 /* eslint-disable no-restricted-globals */
 var __root = this;
 var __previousDoGet = typeof __root.doGet === 'function' ? __root.doGet : null;
+var __previousDoPost = typeof __root.doPost === 'function' ? __root.doPost : null;
 var TZ = 'Asia/Tokyo';
 
 function doGet(e) {
@@ -26,9 +27,75 @@ function doGet(e) {
   return jsonResponse_({ error: 'Unsupported path: ' + path });
 }
 
-function jsonResponse_(body) {
-  return ContentService.createTextOutput(JSON.stringify(body || {}))
+function doPost(e) {
+  var data;
+  try {
+    data = parsePostJson_(e);
+  } catch (error) {
+    var parseMessage = error && error.message ? String(error.message) : 'invalid JSON body';
+    return jsonResponse_({ ok: false, error: parseMessage }, 400);
+  }
+
+  var requestId = String(data.request_id || '').trim();
+  if (!requestId) {
+    return jsonResponse_({ ok: false, error: 'request_id is required' }, 400);
+  }
+
+  var path = String(data.path || '').trim();
+  if (!path) {
+    return jsonResponse_({ ok: false, error: 'path is required' }, 400);
+  }
+
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    return jsonResponse_({ ok: false, error: 'lock timeout' }, 429);
+  }
+
+  try {
+    var ss = SpreadsheetApp.getActive();
+    var requestsSheet = ensureRequestsSheet_(ss);
+    var existingRow = findRequestRow_(requestsSheet, requestId);
+    if (existingRow > 0) {
+      return jsonResponse_({ ok: true, duplicate: true });
+    }
+
+    var appendedRow = appendRequestRow_(requestsSheet, requestId, path);
+    try {
+      var result = processRequestPath_(ss, path, data, e);
+      if (result && typeof result.getContent === 'function') {
+        return result;
+      }
+      var body = result && typeof result === 'object' ? result : {};
+      if (typeof body.ok === 'undefined') {
+        body.ok = true;
+      }
+      body.duplicate = false;
+      return jsonResponse_(body);
+    } catch (error) {
+      if (appendedRow > 0) {
+        requestsSheet.deleteRow(appendedRow);
+      }
+      throw error;
+    }
+  } catch (error) {
+    var message = error && error.message ? String(error.message) : String(error);
+    return jsonResponse_({ ok: false, error: message });
+  } finally {
+    try {
+      lock.releaseLock();
+    } catch (releaseError) {
+      // no-op
+    }
+  }
+}
+
+function jsonResponse_(body, status) {
+  var output = ContentService.createTextOutput(JSON.stringify(body || {}))
     .setMimeType(ContentService.MimeType.JSON);
+  if (typeof status === 'number' && typeof output.setStatusCode === 'function') {
+    output.setStatusCode(status);
+  }
+  return output;
 }
 
 function readMadeSummary_(start, end, factory) {
@@ -311,6 +378,70 @@ function readMadeSummary_(start, end, factory) {
     rows: rows,
     factories: factoriesResult,
   };
+}
+
+function parsePostJson_(e) {
+  if (!e || !e.postData || !e.postData.contents) {
+    return {};
+  }
+  var raw = String(e.postData.contents || '');
+  if (!raw) {
+    return {};
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error('invalid JSON body');
+  }
+}
+
+function ensureRequestsSheet_(ss) {
+  var sheet = ss.getSheetByName('REQUESTS');
+  if (!sheet) {
+    sheet = ss.insertSheet('REQUESTS');
+  }
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(['request_id', 'path', 'ts']);
+  } else {
+    var headerRange = sheet.getRange(1, 1, 1, Math.max(3, sheet.getLastColumn() || 3));
+    var headers = headerRange.getValues()[0];
+    var firstHeader = String(headers[0] || '').toLowerCase();
+    if (firstHeader !== 'request_id') {
+      sheet.insertRowBefore(1);
+      sheet.getRange(1, 1, 1, 3).setValues([['request_id', 'path', 'ts']]);
+    }
+  }
+  return sheet;
+}
+
+function findRequestRow_(sheet, requestId) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) {
+    return -1;
+  }
+  var values = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  for (var i = 0; i < values.length; i++) {
+    var value = String(values[i][0] || '').trim();
+    if (value && value === requestId) {
+      return i + 2;
+    }
+  }
+  return -1;
+}
+
+function appendRequestRow_(sheet, requestId, path) {
+  sheet.appendRow([requestId, path, new Date()]);
+  return sheet.getLastRow();
+}
+
+function processRequestPath_(ss, path, data, e) {
+  if (__previousDoPost) {
+    var previousResult = __previousDoPost(e);
+    if (previousResult) {
+      return previousResult;
+    }
+  }
+  return {};
 }
 
 function readSheetObjects_(ss, name) {

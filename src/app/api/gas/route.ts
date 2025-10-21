@@ -21,7 +21,8 @@ export async function GET(req: NextRequest) {
     });
     url.searchParams.set("key", GAS_API_KEY as string);
 
-    const res = await fetch(url.toString(), { cache: "no-store" });
+    const signal = AbortSignal.timeout(15000);
+    const res = await fetch(url.toString(), { cache: "no-store", signal });
     const body = await res.text();
 
     return new NextResponse(body, {
@@ -62,11 +63,13 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    const signal = AbortSignal.timeout(15000);
     const res = await fetch(url.toString(), {
       method: "POST",
       headers: { "content-type": contentType },
       body: bodyToSend,
       cache: "no-store",
+      signal,
     });
 
     const text = await res.text();

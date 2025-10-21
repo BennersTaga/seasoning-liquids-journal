@@ -103,6 +103,7 @@ const formatPacks = (n: number) =>
     minimumFractionDigits: 1,
     maximumFractionDigits: 1,
   });
+const genId = () => globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2);
 const genLotId = (factoryCode: string, seq: number, d = new Date()) =>
   `${factoryCode}-${format(d, "yyyyMMdd")}-${String(seq).padStart(3, "0")}`;
 
@@ -235,9 +236,19 @@ function normalizeStorage(rows?: StorageAggRow[]): StorageAggEntry[] {
 
 export default function App() {
   const [tab, setTab] = useState("office");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [onsiteBusy, setOnsiteBusy] = useState(false);
+  const onsiteRequestIdRef = useRef<string | null>(null);
   const mastersQuery = useMasters();
   const mastersData = mastersQuery.data;
   const mastersLoading = mastersQuery.isLoading || (!mastersData && !mastersQuery.error);
+
+  const clearError = useCallback(() => setErrorMessage(null), []);
+  const reportError = useCallback((error: unknown, requestId: string) => {
+    const message =
+      error instanceof Error && error.message ? error.message : "通信に失敗しました";
+    setErrorMessage(`${message} (request_id: ${requestId})`);
+  }, []);
 
   const { factories, storageByFactory, flavors, oemList, uses, allowedByUse } = useMemo(
     () => deriveDataFromMasters(mastersData),
@@ -284,9 +295,14 @@ export default function App() {
       oemPartner?: string,
       leftover?: { loc: string; grams: number },
     ) => {
+      if (onsiteBusy) return;
       if (!factoryCode || !flavorId || !manufacturedAt || producedG <= 0) {
         return;
       }
+      if (!onsiteRequestIdRef.current) {
+        onsiteRequestIdRef.current = genId();
+      }
+      const requestId = onsiteRequestIdRef.current as string;
       const payload = {
         factory_code: factoryCode,
         flavor_id: flavorId,
@@ -300,18 +316,23 @@ export default function App() {
             : null,
       };
       try {
-        await apiPost("onsite-make", payload);
+        setOnsiteBusy(true);
+        clearError();
+        await apiPost("onsite-make", payload, { requestId, timeoutMs: 20000 });
         await Promise.all([
           mutate(["orders", factoryCode, false]),
           mutate(["storage-agg", factoryCode]),
         ]);
+        onsiteRequestIdRef.current = null;
       } catch (error) {
         console.error(error);
-        alert("通信に失敗しました");
+        reportError(error, requestId);
         throw error;
+      } finally {
+        setOnsiteBusy(false);
       }
     },
-    [],
+    [onsiteBusy, clearError, reportError],
   );
 
   return (
@@ -320,6 +341,14 @@ export default function App() {
         <h1 className="text-2xl font-semibold">調味液日報 UI プロトタイプ</h1>
         <div className="text-sm opacity-80">タブで「オフィス / 現場」を切替</div>
       </header>
+      {errorMessage && (
+        <div
+          role="alert"
+          className="rounded-md border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-700"
+        >
+          {errorMessage}
+        </div>
+      )}
       <Tabs value={tab} onValueChange={setTab}>
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <TabsList className="grid w-full grid-cols-2 md:w-96">
@@ -341,6 +370,8 @@ export default function App() {
             mastersLoading={mastersLoading}
             uses={uses}
             allowedByUse={allowedByUse}
+            onRequestError={reportError}
+            onRequestSuccess={clearError}
           />
         </TabsContent>
         <TabsContent value="floor" className="mt-6">
@@ -352,8 +383,11 @@ export default function App() {
             oemList={oemList}
             calcExpiry={calcExpiry}
             registerOnsiteMake={registerOnsiteMake}
+            registerBusy={onsiteBusy}
             mastersLoading={mastersLoading}
             uses={uses}
+            onRequestError={reportError}
+            onRequestSuccess={clearError}
           />
         </TabsContent>
       </Tabs>
@@ -372,6 +406,8 @@ function Office({
   mastersLoading,
   uses,
   allowedByUse,
+  onRequestError,
+  onRequestSuccess,
 }: {
   factories: { code: string; name: string }[];
   flavors: FlavorWithRecipe[];
@@ -380,6 +416,8 @@ function Office({
   mastersLoading: boolean;
   uses: { code: string; name: string; type: "fissule" | "oem" }[];
   allowedByUse: Record<string, Set<string>>;
+  onRequestError: (error: unknown, requestId: string) => void;
+  onRequestSuccess: () => void;
 }) {
   const [factory, setFactory] = useState(factories[0]?.code ?? "");
   const [flavor, setFlavor] = useState(flavors[0]?.id ?? "");
@@ -387,7 +425,8 @@ function Office({
   const [packs, setPacks] = useState(100);
   const [oemPartner, setOemPartner] = useState(oemList[0] ?? "");
   const [oemGrams, setOemGrams] = useState(0);
-  const [submitting, setSubmitting] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const requestIdRef = useRef<string | null>(null);
   const seqRef = useRef<Record<string, number>>({});
   const selectedUse = useMemo(
     () => uses.find(u => u.code === useCode),
@@ -488,9 +527,14 @@ function Office({
   }, [orderCards]);
 
   const createOrder = useCallback(async () => {
+    if (busy) return;
     if (!factory || !flavor || !useCode) return;
     if (derivedUseType === "fissule" && packs <= 0) return;
     if (derivedUseType === "oem" && (!oemPartner || oemGrams <= 0)) return;
+    if (!requestIdRef.current) {
+      requestIdRef.current = genId();
+    }
+    const requestId = requestIdRef.current as string;
     const today = new Date();
     const dateSegment = format(today, "yyyyMMdd");
     const key = `${factory}-${dateSegment}`;
@@ -524,24 +568,38 @@ function Office({
             archived: false,
           };
     try {
-      setSubmitting(true);
-      const resp = await apiPost<{ ok?: boolean }>("orders-create", body);
+      setBusy(true);
+      onRequestSuccess();
+      const resp = await apiPost<{ ok?: boolean }>("orders-create", body, {
+        requestId,
+        timeoutMs: 20000,
+      });
       if (!resp?.ok) {
         throw new Error(JSON.stringify(resp));
       }
       seqRef.current[key] = seq + 1;
       await mutate(["orders", factory, false]);
+      requestIdRef.current = null;
+      onRequestSuccess();
     } catch (error) {
       console.error(error);
-      const message =
-        error instanceof Error && error.message
-          ? error.message
-          : "通信に失敗しました";
-      alert(message);
+      onRequestError(error, requestId);
     } finally {
-      setSubmitting(false);
+      setBusy(false);
     }
-  }, [factory, flavor, useCode, derivedUseType, packs, oemPartner, oemGrams, findFlavor]);
+  }, [
+    busy,
+    factory,
+    flavor,
+    useCode,
+    derivedUseType,
+    packs,
+    oemPartner,
+    oemGrams,
+    findFlavor,
+    onRequestSuccess,
+    onRequestError,
+  ]);
 
   return (
     <div className="grid md:grid-cols-3 gap-6 items-start">
@@ -659,7 +717,7 @@ function Office({
             </>
           )}
           <div className="flex gap-3">
-            <Button onClick={createOrder} disabled={submitting}>
+            <Button onClick={createOrder} disabled={busy}>
               チケットを登録
             </Button>
             <div className="text-sm text-muted-foreground flex items-center gap-2">
@@ -678,6 +736,8 @@ function Office({
             findFlavor={findFlavor}
             calcExpiry={calcExpiry}
             factoryCode={factory}
+            onRequestError={onRequestError}
+            onRequestSuccess={onRequestSuccess}
           />
         ))}
         {storageAgg.length === 0 && <Empty>余剰の在庫はここに集計されます</Empty>}
@@ -754,8 +814,11 @@ function Floor({
   oemList,
   calcExpiry,
   registerOnsiteMake,
+  registerBusy,
   mastersLoading,
   uses,
+  onRequestError,
+  onRequestSuccess,
 }: {
   factories: { code: string; name: string }[];
   flavors: FlavorWithRecipe[];
@@ -772,12 +835,19 @@ function Floor({
     oemPartner?: string,
     leftover?: { loc: string; grams: number },
   ) => Promise<void>;
+  registerBusy: boolean;
   mastersLoading: boolean;
   uses: { code: string; name: string; type: "fissule" | "oem" }[];
+  onRequestError: (error: unknown, requestId: string) => void;
+  onRequestSuccess: () => void;
 }) {
   const [factory, setFactory] = useState(factories[0]?.code ?? "");
   const [extraOpen, setExtraOpen] = useState(false);
   const factoryDisabled = mastersLoading || factories.length === 0;
+  const [keepBusy, setKeepBusy] = useState(false);
+  const keepRequestIdRef = useRef<string | null>(null);
+  const [madeBusy, setMadeBusy] = useState(false);
+  const madeRequestIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!factories.length) {
@@ -810,8 +880,15 @@ function Floor({
 
   const handleKeep = useCallback(
     async (order: OrderCard, values: KeepFormValues) => {
+      if (keepBusy) return;
       const line = order.lines[0];
+      if (!keepRequestIdRef.current) {
+        keepRequestIdRef.current = genId();
+      }
+      const requestId = keepRequestIdRef.current as string;
       try {
+        setKeepBusy(true);
+        onRequestSuccess();
         await apiPost("action", {
           type: "KEEP",
           factory_code: order.factoryCode,
@@ -822,22 +899,27 @@ function Floor({
             grams: values.grams,
             manufactured_at: values.manufacturedAt,
           },
-        });
+        }, { requestId, timeoutMs: 20000 });
         await Promise.all([
           mutate(["storage-agg", order.factoryCode]),
           mutate(["orders", order.factoryCode, false]),
         ]);
+        keepRequestIdRef.current = null;
+        onRequestSuccess();
       } catch (error) {
         console.error(error);
-        alert("通信に失敗しました");
+        onRequestError(error, requestId);
         throw error;
+      } finally {
+        setKeepBusy(false);
       }
     },
-    [],
+    [keepBusy, onRequestError, onRequestSuccess],
   );
 
   const handleReportMade = useCallback(
     async (order: OrderCard, report: MadeReport) => {
+      if (madeBusy) return;
       const line = order.lines[0];
       const leftoverPayload = report.leftover && report.leftover.grams > 0
         ? { location: report.leftover.location, grams: report.leftover.grams }
@@ -860,25 +942,35 @@ function Floor({
       const finalPayload = materialsPayload.length
         ? { ...basePayload, materials: materialsPayload }
         : basePayload;
+      if (!madeRequestIdRef.current) {
+        madeRequestIdRef.current = genId();
+      }
+      const requestId = madeRequestIdRef.current as string;
       try {
+        setMadeBusy(true);
+        onRequestSuccess();
         await apiPost("action", {
           type: "MADE_SPLIT",
           factory_code: order.factoryCode,
           lot_id: order.lotId,
           flavor_id: line.flavorId,
           payload: finalPayload,
-        });
+        }, { requestId, timeoutMs: 20000 });
         await Promise.all([
           mutate(["orders", order.factoryCode, false]),
           mutate(["storage-agg", order.factoryCode]),
         ]);
+        madeRequestIdRef.current = null;
+        onRequestSuccess();
       } catch (error) {
         console.error(error);
-        alert("通信に失敗しました");
+        onRequestError(error, requestId);
         throw error;
+      } finally {
+        setMadeBusy(false);
       }
     },
-    [],
+    [madeBusy, onRequestError, onRequestSuccess],
   );
 
   return (
@@ -911,21 +1003,23 @@ function Floor({
           }
         >
           {openOrders.map(order => (
-          <OrderCardView
-            key={order.orderId}
-            order={order}
-            remainingPacks={Math.max(
-              0,
-              order.lines[0]?.packsRemaining ?? order.lines[0]?.packs ?? 0,
-            )}
-            onKeep={values => handleKeep(order, values)}
-            onReportMade={report => handleReportMade(order, report)}
-            findFlavor={findFlavor}
-            storageByFactory={storageByFactory}
-            mastersLoading={mastersLoading}
-            purposeLabelByCode={purposeLabelByCode}
-          />
-        ))}
+            <OrderCardView
+              key={order.orderId}
+              order={order}
+              remainingPacks={Math.max(
+                0,
+                order.lines[0]?.packsRemaining ?? order.lines[0]?.packs ?? 0,
+              )}
+              onKeep={values => handleKeep(order, values)}
+              onReportMade={report => handleReportMade(order, report)}
+              findFlavor={findFlavor}
+              storageByFactory={storageByFactory}
+              mastersLoading={mastersLoading}
+              purposeLabelByCode={purposeLabelByCode}
+              keepBusy={keepBusy}
+              reportBusy={madeBusy}
+            />
+          ))}
           {openOrders.length === 0 && <Empty>ここにカードが表示されます</Empty>}
         </KanbanColumn>
         <KanbanColumn title="保管（在庫）" icon={<Warehouse className="h-4 w-4" />}>
@@ -936,6 +1030,8 @@ function Floor({
               findFlavor={findFlavor}
               calcExpiry={calcExpiry}
               factoryCode={factory}
+              onRequestError={onRequestError}
+              onRequestSuccess={onRequestSuccess}
             />
           ))}
           {storageAgg.length === 0 && <Empty>余剰の在庫はここに集計されます</Empty>}
@@ -947,6 +1043,7 @@ function Floor({
         defaultFlavorId={flavors[0]?.id ?? ""}
         factoryCode={factory}
         onRegister={registerOnsiteMake}
+        busy={registerBusy}
         flavors={flavors}
         oemList={oemList}
         findFlavor={findFlavor}
@@ -1009,6 +1106,8 @@ function OrderCardView({
   storageByFactory,
   mastersLoading,
   purposeLabelByCode,
+  keepBusy,
+  reportBusy,
 }: {
   order: OrderCard;
   remainingPacks: number;
@@ -1018,6 +1117,8 @@ function OrderCardView({
   storageByFactory: Record<string, string[]>;
   mastersLoading: boolean;
   purposeLabelByCode: Record<string, string>;
+  keepBusy: boolean;
+  reportBusy: boolean;
 }) {
   const [open, setOpen] = useState<null | "keep" | "made" | "skip" | "choice" | "split">(null);
   const line = order.lines[0];
@@ -1071,6 +1172,7 @@ function OrderCardView({
         storageByFactory={storageByFactory}
         onSubmit={onKeep}
         mastersLoading={mastersLoading}
+        busy={keepBusy}
       />
       <MadeDialog2
         open={open === "made"}
@@ -1082,6 +1184,7 @@ function OrderCardView({
         findFlavor={findFlavor}
         storageByFactory={storageByFactory}
         mastersLoading={mastersLoading}
+        busy={reportBusy}
       />
       <MadeChoiceDialog
         open={open === "choice"}
@@ -1100,6 +1203,7 @@ function OrderCardView({
         findFlavor={findFlavor}
         storageByFactory={storageByFactory}
         mastersLoading={mastersLoading}
+        busy={reportBusy}
       />
       <Dialog open={open === "skip"} onOpenChange={o => { if (!o) reset(); }}>
         <DialogContent>
@@ -1157,6 +1261,7 @@ function KeepDialog({
   storageByFactory,
   onSubmit,
   mastersLoading,
+  busy,
 }: {
   open: boolean;
   onClose: () => void;
@@ -1164,11 +1269,11 @@ function KeepDialog({
   storageByFactory: Record<string, string[]>;
   onSubmit: (values: KeepFormValues) => Promise<void>;
   mastersLoading: boolean;
+  busy: boolean;
 }) {
   const [loc, setLoc] = useState("");
   const [gramsValue, setGramsValue] = useState(0);
   const [manufacturedAt, setManufacturedAt] = useState(format(new Date(), "yyyy-MM-dd"));
-  const [submitting, setSubmitting] = useState(false);
   const locations = storageByFactory[factoryCode] || [];
 
   useEffect(() => {
@@ -1180,15 +1285,12 @@ function KeepDialog({
   }, [open]);
 
   const handleSubmit = async () => {
-    if (!loc || gramsValue <= 0 || !manufacturedAt) return;
+    if (busy || !loc || gramsValue <= 0 || !manufacturedAt) return;
     try {
-      setSubmitting(true);
       await onSubmit({ location: loc, grams: gramsValue, manufacturedAt });
       onClose();
     } catch {
       // keep dialog open
-    } finally {
-      setSubmitting(false);
     }
   };
 
@@ -1233,7 +1335,10 @@ function KeepDialog({
         </div>
         <DialogFooter>
           <Button variant="secondary" onClick={onClose}>キャンセル</Button>
-          <Button disabled={!loc || gramsValue <= 0 || !manufacturedAt || submitting} onClick={handleSubmit}>
+          <Button
+            disabled={busy || !loc || gramsValue <= 0 || !manufacturedAt}
+            onClick={handleSubmit}
+          >
             登録
           </Button>
         </DialogFooter>
@@ -1252,6 +1357,7 @@ function MadeDialog2({
   findFlavor,
   storageByFactory,
   mastersLoading,
+  busy,
 }: {
   open: boolean;
   onClose: () => void;
@@ -1262,6 +1368,7 @@ function MadeDialog2({
   findFlavor: (id: string) => FlavorWithRecipe;
   storageByFactory: Record<string, string[]>;
   mastersLoading: boolean;
+  busy: boolean;
 }) {
   // 復活：チェックボックス＋目安＋初期値
   const [checked, setChecked] = useState<Record<string, boolean>>({});
@@ -1272,7 +1379,6 @@ function MadeDialog2({
   const [leftLoc, setLeftLoc] = useState("");
   const [leftGrams, setLeftGrams] = useState(0);
   const [packsMade, setPacksMade] = useState(0);
-  const [submitting, setSubmitting] = useState(false);
   const line = order.lines[0];
   const flavor = findFlavor(line.flavorId);
   const showPackInput = line.useType === "fissule" && (line.packs || 0) > 0;
@@ -1321,6 +1427,7 @@ function MadeDialog2({
   }, [open, flavor.recipe, grams]);
 
   const submit = async () => {
+    if (busy) return;
     if (showPackInput && (packsMade <= 0 || tooMuch)) return;
     if (outcome !== "extra" && outcome !== "used") return;
     const packsValue = showPackInput ? packsMade : 0;
@@ -1350,7 +1457,6 @@ function MadeDialog2({
       .filter((m): m is MaterialLine => m !== null);
 
     try {
-      setSubmitting(true);
       await onReport({
         packs: packsValue,
         grams: gramsValue,
@@ -1362,8 +1468,6 @@ function MadeDialog2({
       onClose();
     } catch {
       // keep dialog open
-    } finally {
-      setSubmitting(false);
     }
   };
 
@@ -1495,8 +1599,8 @@ function MadeDialog2({
           <Button variant="secondary" onClick={onClose}>キャンセル</Button>
           <Button
             disabled={
+              busy ||
               !manufacturedAt ||
-              submitting ||
               (showPackInput && (packsMade <= 0 || tooMuch)) ||
               (outcome === "extra" && (!leftLoc || leftGrams <= 0)) ||
               outcome === ""
@@ -1517,6 +1621,7 @@ function OnsiteMakeDialog({
   defaultFlavorId,
   factoryCode,
   onRegister,
+  busy,
   flavors,
   oemList,
   findFlavor,
@@ -1536,6 +1641,7 @@ function OnsiteMakeDialog({
     oemPartner?: string,
     leftover?: { loc: string; grams: number },
   ) => Promise<void>;
+  busy: boolean;
   flavors: FlavorWithRecipe[];
   oemList: string[];
   findFlavor: (id: string) => FlavorWithRecipe;
@@ -1551,11 +1657,9 @@ function OnsiteMakeDialog({
   const [outcome, setOutcome] = useState<"extra" | "used" | "">("");
   const [leftLoc, setLeftLoc] = useState("");
   const [leftG, setLeftG] = useState(0);
-  const [submitting, setSubmitting] = useState(false);
   const flavor = findFlavor(flavorId);
   const sum = Object.keys(qty).reduce((acc, key) => acc + (checked[key] ? qty[key] || 0 : 0), 0);
   const flavorDisabled = mastersLoading || flavors.length === 0;
-  const oemDisabled = mastersLoading || oemList.length === 0;
   const locations = storageByFactory[factoryCode] || [];
 
   useEffect(() => {
@@ -1576,9 +1680,9 @@ function OnsiteMakeDialog({
   }, [open, defaultFlavorId, oemList]);
 
   const submit = async () => {
+    if (busy) return;
     const leftover = outcome === "extra" && leftLoc && leftG > 0 ? { loc: leftLoc, grams: leftG } : undefined;
     try {
-      setSubmitting(true);
       await onRegister(
         factoryCode,
         flavorId,
@@ -1591,8 +1695,6 @@ function OnsiteMakeDialog({
       onClose();
     } catch {
       // keep dialog open
-    } finally {
-      setSubmitting(false);
     }
   };
 
@@ -1711,9 +1813,9 @@ function OnsiteMakeDialog({
           <Button variant="secondary" onClick={onClose}>キャンセル</Button>
           <Button
             disabled={
+              busy ||
               sum <= 0 ||
               !manufacturedAt ||
-              submitting ||
               (useType === "oem" && !oemPartner) ||
               (outcome === "extra" && (!leftLoc || leftG <= 0)) ||
               outcome === ""
@@ -1733,11 +1835,15 @@ function StorageCardView({
   findFlavor,
   calcExpiry,
   factoryCode,
+  onRequestError,
+  onRequestSuccess,
 }: {
   agg: StorageAggEntry;
   findFlavor: (id: string) => FlavorWithRecipe;
   calcExpiry: (manufacturedAt: string, flavorId: string) => string;
   factoryCode: string;
+  onRequestError: (error: unknown, requestId: string) => void;
+  onRequestSuccess: () => void;
 }) {
   const [useOpen, setUseOpen] = useState(false);
   const [wasteOpen, setWasteOpen] = useState(false);
@@ -1748,8 +1854,10 @@ function StorageCardView({
   const [wasteReason, setWasteReason] = useState<"expiry" | "mistake" | "other" | "">("");
   const [wasteQty, setWasteQty] = useState(0);
   const [wasteText, setWasteText] = useState("");
-  const [useLoading, setUseLoading] = useState(false);
-  const [wasteLoading, setWasteLoading] = useState(false);
+  const [useBusy, setUseBusy] = useState(false);
+  const [wasteBusy, setWasteBusy] = useState(false);
+  const useRequestIdRef = useRef<string | null>(null);
+  const wasteRequestIdRef = useRef<string | null>(null);
   const [currentGrams, setCurrentGrams] = useState(agg.grams);
   const [currentPacksEquiv, setCurrentPacksEquiv] = useState<number | undefined>(agg.packsEquiv);
   const flavor = findFlavor(agg.flavorId);
@@ -1781,10 +1889,16 @@ function StorageCardView({
   const effectiveLocation = (current: string) => current || agg.locations[0] || "";
 
   const handleUse = async () => {
+    if (useBusy) return;
     const location = effectiveLocation(loc);
     if (!location || useQty <= 0) return;
+    if (!useRequestIdRef.current) {
+      useRequestIdRef.current = genId();
+    }
+    const requestId = useRequestIdRef.current as string;
     try {
-      setUseLoading(true);
+      setUseBusy(true);
+      onRequestSuccess();
       const resp = await apiPost<{
         storage_after?: { grams: number; packs_equiv?: number | null };
       }>("action", {
@@ -1801,7 +1915,7 @@ function StorageCardView({
               ? { grams: leftQty, location }
               : null,
         },
-      });
+      }, { requestId, timeoutMs: 20000 });
       await Promise.all([
         mutate(["storage-agg", factoryCode], undefined, { revalidate: true }),
         mutate(["orders", factoryCode, false], undefined, { revalidate: true }),
@@ -1810,21 +1924,29 @@ function StorageCardView({
         setCurrentGrams(resp.storage_after.grams);
         setCurrentPacksEquiv(resp.storage_after.packs_equiv ?? undefined);
       }
+      useRequestIdRef.current = null;
+      onRequestSuccess();
       setUseOpen(false);
     } catch (error) {
       console.error(error);
-      alert(error instanceof Error ? error.message : "通信に失敗しました");
+      onRequestError(error, requestId);
     } finally {
-      setUseLoading(false);
+      setUseBusy(false);
     }
   };
 
   const handleWaste = async () => {
+    if (wasteBusy) return;
     const location = effectiveLocation(loc);
     if (!location) return;
     if (wasteReason === "" || wasteQty <= 0) return;
+    if (!wasteRequestIdRef.current) {
+      wasteRequestIdRef.current = genId();
+    }
+    const requestId = wasteRequestIdRef.current as string;
     try {
-      setWasteLoading(true);
+      setWasteBusy(true);
+      onRequestSuccess();
       const payload =
         wasteReason === "other"
           ? { reason: "other", note: wasteText, grams: wasteQty, qty: wasteQty, location }
@@ -1838,19 +1960,21 @@ function StorageCardView({
         lot_id: agg.lotId,
         flavor_id: agg.flavorId,
         payload,
-      });
+      }, { requestId, timeoutMs: 20000 });
 
       await mutate(["storage-agg", factoryCode], undefined, { revalidate: true });
       if (resp?.storage_after) {
         setCurrentGrams(resp.storage_after.grams);
         setCurrentPacksEquiv(resp.storage_after.packs_equiv ?? undefined);
       }
+      wasteRequestIdRef.current = null;
+      onRequestSuccess();
       setWasteOpen(false);
     } catch (error) {
       console.error(error);
-      alert(error instanceof Error ? error.message : "通信に失敗しました");
+      onRequestError(error, requestId);
     } finally {
-      setWasteLoading(false);
+      setWasteBusy(false);
     }
   };
 
@@ -1944,7 +2068,7 @@ function StorageCardView({
             <Button variant="secondary" onClick={() => setUseOpen(false)}>キャンセル</Button>
             <Button
               disabled={
-                useLoading ||
+                useBusy ||
                 useQty <= 0 ||
                 (useOutcome === "extra" && (leftQty <= 0 || !effectiveLocation(loc)))
               }
@@ -2011,7 +2135,7 @@ function StorageCardView({
             <Button variant="secondary" onClick={() => setWasteOpen(false)}>キャンセル</Button>
             <Button
               disabled={
-                wasteLoading ||
+                wasteBusy ||
                 wasteReason === "" ||
                 wasteQty <= 0 ||
                 !effectiveLocation(loc) ||
