@@ -318,7 +318,7 @@ export default function App() {
       try {
         setOnsiteBusy(true);
         clearError();
-        await apiPost("onsite-make", payload, { requestId, timeoutMs: 20000 });
+        await apiPost("onsite-make", payload, { requestId });
         await Promise.all([
           mutate(["orders", factoryCode, false]),
           mutate(["storage-agg", factoryCode]),
@@ -327,6 +327,10 @@ export default function App() {
       } catch (error) {
         console.error(error);
         reportError(error, requestId);
+        await Promise.all([
+          mutate(["orders", factoryCode, false]),
+          mutate(["storage-agg", factoryCode]),
+        ]);
         throw error;
       } finally {
         setOnsiteBusy(false);
@@ -572,7 +576,7 @@ function Office({
       onRequestSuccess();
       const resp = await apiPost<{ ok?: boolean }>("orders-create", body, {
         requestId,
-        timeoutMs: 20000,
+        // timeoutMs は渡さない（既定90s）
       });
       if (!resp?.ok) {
         throw new Error(JSON.stringify(resp));
@@ -899,7 +903,7 @@ function Floor({
             grams: values.grams,
             manufactured_at: values.manufacturedAt,
           },
-        }, { requestId, timeoutMs: 20000 });
+        }, { requestId });
         await Promise.all([
           mutate(["storage-agg", order.factoryCode]),
           mutate(["orders", order.factoryCode, false]),
@@ -955,7 +959,7 @@ function Floor({
           lot_id: order.lotId,
           flavor_id: line.flavorId,
           payload: finalPayload,
-        }, { requestId, timeoutMs: 20000 });
+        }, { requestId });
         await Promise.all([
           mutate(["orders", order.factoryCode, false]),
           mutate(["storage-agg", order.factoryCode]),
@@ -1915,7 +1919,7 @@ function StorageCardView({
               ? { grams: leftQty, location }
               : null,
         },
-      }, { requestId, timeoutMs: 20000 });
+      }, { requestId });
       await Promise.all([
         mutate(["storage-agg", factoryCode], undefined, { revalidate: true }),
         mutate(["orders", factoryCode, false], undefined, { revalidate: true }),
@@ -1960,7 +1964,7 @@ function StorageCardView({
         lot_id: agg.lotId,
         flavor_id: agg.flavorId,
         payload,
-      }, { requestId, timeoutMs: 20000 });
+      }, { requestId });
 
       await mutate(["storage-agg", factoryCode], undefined, { revalidate: true });
       if (resp?.storage_after) {

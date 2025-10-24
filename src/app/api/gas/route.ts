@@ -4,6 +4,8 @@ import { NextRequest, NextResponse } from "next/server";
 
 const GAS_BASE_URL = process.env.GAS_BASE_URL;
 const GAS_API_KEY = process.env.GAS_API_KEY;
+// ルートの待ち時間（既定 90,000ms）
+const ROUTE_TIMEOUT_MS = Number(process.env.GAS_ROUTE_TIMEOUT_MS || "90000");
 
 function ensureEnv() {
   if (!GAS_BASE_URL) throw new Error("GAS_BASE_URL is not set");
@@ -21,7 +23,7 @@ export async function GET(req: NextRequest) {
     });
     url.searchParams.set("key", GAS_API_KEY as string);
 
-    const signal = AbortSignal.timeout(15000);
+    const signal = AbortSignal.timeout(ROUTE_TIMEOUT_MS);
     const res = await fetch(url.toString(), { cache: "no-store", signal });
     const body = await res.text();
 
@@ -63,7 +65,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const signal = AbortSignal.timeout(15000);
+    const signal = AbortSignal.timeout(ROUTE_TIMEOUT_MS);
     const res = await fetch(url.toString(), {
       method: "POST",
       headers: { "content-type": contentType },

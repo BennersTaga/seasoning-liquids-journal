@@ -1,5 +1,10 @@
 // lib/gas.ts (conflict resolved)
 
+// フロントの既定待ち時間（既定 90,000ms）
+const DEFAULT_TIMEOUT = Number(
+  process.env.NEXT_PUBLIC_GAS_CLIENT_TIMEOUT_MS || "90000",
+);
+
 function parseJson<T>(text: string): T {
   try {
     return text ? (JSON.parse(text) as T) : (undefined as T);
@@ -31,7 +36,7 @@ export async function apiGet<T = unknown>(
   const url = `/api/gas?${usp.toString()}`;
   console.debug("[GAS]", { stage: "get:start", path, params, url });
 
-  const timeoutMs = opts?.timeoutMs ?? 20000;
+  const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT;
   const { controller, timeoutId } = createTimeoutController(timeoutMs);
 
   try {
@@ -63,7 +68,7 @@ export async function apiPost<T = unknown>(
   opts?: { requestId?: string; timeoutMs?: number },
 ): Promise<T> {
   console.debug("[GAS]", { stage: "post:start", path, payload: body, opts });
-  const timeoutMs = opts?.timeoutMs ?? 20000;
+  const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT;
   const { controller, timeoutId } = createTimeoutController(timeoutMs);
   const payload = {
     path,
