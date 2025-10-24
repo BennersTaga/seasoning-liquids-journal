@@ -434,14 +434,61 @@ function appendRequestRow_(sheet, requestId, path) {
   return sheet.getLastRow();
 }
 
+var WRITE_PATHS_REQUIRING_BACKUP_ = {
+  'orders-create': true,
+  'onsite-make': true,
+  'action': true,
+};
+
 function processRequestPath_(ss, path, data, e) {
+  var normalizedPath = String(path || '').trim();
+  var needsBackup = !!WRITE_PATHS_REQUIRING_BACKUP_[normalizedPath];
+  var sheetStatesBefore = needsBackup ? captureSheetStates_(ss) : null;
+
+  var previousResult = null;
   if (__previousDoPost) {
-    var previousResult = __previousDoPost(e);
-    if (previousResult) {
-      return previousResult;
+    previousResult = __previousDoPost(e);
+  }
+
+  if (!needsBackup) {
+    return previousResult || {};
+  }
+
+  var responseInfo = extractResponseInfo_(previousResult);
+  var body = responseInfo.body || {};
+  var isOk = typeof body.ok === 'undefined' ? true : body.ok !== false;
+  var isDuplicate = body.duplicate === true;
+
+  var backupError = null;
+  if (isOk && !isDuplicate) {
+    try {
+      var ssBackup = openBackupSpreadsheet_();
+      var syncError = syncNewRowsToBackup_(ss, ssBackup, sheetStatesBefore);
+      if (syncError) {
+        backupError = syncError;
+      }
+    } catch (error) {
+      backupError = error && error.message ? String(error.message) : String(error);
+      logNewRowsAsBackupError_(ss, sheetStatesBefore, normalizedPath, data, error);
     }
   }
-  return {};
+
+  if (backupError === undefined) {
+    backupError = null;
+  }
+  body.backupError = backupError;
+
+  if (responseInfo.textOutput) {
+    responseInfo.textOutput.setContent(JSON.stringify(body));
+    responseInfo.textOutput.setMimeType(ContentService.MimeType.JSON);
+    return responseInfo.textOutput;
+  }
+
+  if (previousResult && typeof previousResult === 'object') {
+    return previousResult;
+  }
+
+  return body;
 }
 
 function readSheetObjects_(ss, name) {
