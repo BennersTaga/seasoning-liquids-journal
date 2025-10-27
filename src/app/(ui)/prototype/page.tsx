@@ -1656,20 +1656,70 @@ function OnsiteMakeDialog({
   const [manufacturedAt, setManufacturedAt] = useState(format(new Date(), "yyyy-MM-dd"));
   const [useType, setUseType] = useState<"fissule" | "oem">("fissule");
   const [oemPartner, setOemPartner] = useState(oemList[0] ?? "");
-  const [checked, setChecked] = useState<Record<string, boolean>>({});
-  const [qty, setQty] = useState<Record<string, number>>({});
+  const [extraPacks, setExtraPacks] = useState<number>(0);
+  const [extraMaterials, setExtraMaterials] = useState<MaterialLine[] | null>(null);
   const [outcome, setOutcome] = useState<"extra" | "used" | "">("");
   const [leftLoc, setLeftLoc] = useState("");
   const [leftG, setLeftG] = useState(0);
   const flavor = findFlavor(flavorId);
-  const sum = Object.keys(qty).reduce((acc, key) => acc + (checked[key] ? qty[key] || 0 : 0), 0);
   const flavorDisabled = mastersLoading || flavors.length === 0;
   const locations = storageByFactory[factoryCode] || [];
 
+  const extraTotalGrams = useMemo(() => {
+    const ptg = Number(flavor?.packToGram ?? 0);
+    const packs = Number.isFinite(extraPacks) ? extraPacks : 0;
+    return Math.max(0, Math.round(ptg * packs));
+  }, [flavor, extraPacks]);
+
+  const recommendedMaterials = useMemo<MaterialLine[]>(() => {
+    const recipe = flavor?.recipe ?? [];
+    const sum = recipe.reduce((s, r) => s + Number(r.qty || 0), 0);
+    if (!sum || !extraTotalGrams) {
+      return recipe.map(r => ({
+        ingredient_name: r.ingredient,
+        reported_qty: 0,
+        unit: r.unit || "g",
+        source: "entered",
+      }));
+    }
+    return recipe.map(r => {
+      const portion = Math.round(extraTotalGrams * Number(r.qty || 0) / sum);
+      return {
+        ingredient_name: r.ingredient,
+        reported_qty: portion,
+        unit: r.unit || "g",
+        source: "entered",
+      };
+    });
+  }, [flavor, extraTotalGrams]);
+
   useEffect(() => {
-    setChecked({});
-    setQty({});
+    setExtraMaterials(null);
   }, [flavorId]);
+
+  useEffect(() => {
+    if (!open) return;
+    setExtraMaterials(prev => {
+      if (!recommendedMaterials.length) {
+        return recommendedMaterials.map(m => ({ ...m }));
+      }
+      if (!prev || prev.length === 0) {
+        return recommendedMaterials.map(m => ({ ...m }));
+      }
+      if (prev.length !== recommendedMaterials.length) {
+        return recommendedMaterials.map(m => ({ ...m }));
+      }
+      const same = prev.every((m, idx) => {
+        const rec = recommendedMaterials[idx];
+        return (
+          m.ingredient_name === rec.ingredient_name &&
+          (m.unit || "g") === (rec.unit || "g") &&
+          m.reported_qty === rec.reported_qty
+        );
+      });
+      return same ? recommendedMaterials.map(m => ({ ...m })) : prev;
+    });
+  }, [open, recommendedMaterials]);
 
   useEffect(() => {
     if (open) {
@@ -1679,19 +1729,22 @@ function OnsiteMakeDialog({
       setOutcome("");
       setLeftLoc("");
       setLeftG(0);
+      setExtraPacks(0);
+      setExtraMaterials(null);
       setManufacturedAt(format(new Date(), "yyyy-MM-dd"));
     }
   }, [open, defaultFlavorId, oemList]);
 
   const submit = async () => {
     if (busy) return;
+    if (extraTotalGrams <= 0) return;
     const leftover = outcome === "extra" && leftLoc && leftG > 0 ? { loc: leftLoc, grams: leftG } : undefined;
     try {
       await onRegister(
         factoryCode,
         flavorId,
         useType,
-        sum,
+        extraTotalGrams,
         manufacturedAt,
         useType === "oem" ? oemPartner : undefined,
         leftover,
@@ -1743,31 +1796,48 @@ function OnsiteMakeDialog({
             <Input type="date" value={manufacturedAt} onChange={e => setManufacturedAt(e.target.value)} />
           </div>
         </div>
+        <div className="space-y-2">
+          <Label>今回作成パック数</Label>
+          <Input
+            type="number"
+            value={extraPacks}
+            onChange={e => {
+              const v = Number.parseInt(e.target.value || "0", 10);
+              setExtraPacks(Number.isFinite(v) ? Math.max(0, v) : 0);
+            }}
+            inputMode="numeric"
+          />
+          <div className="text-xs text-muted-foreground mt-1">目安必要量: {formatGram(extraTotalGrams)}</div>
+        </div>
         <div className="rounded-xl border p-3 space-y-3">
           <div className="text-sm font-medium">レシピ：{flavor.liquidName}</div>
-          {flavor.recipe.map((r, idx) => (
-            <div key={idx} className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id={`ing2-${idx}`}
-                  checked={!!checked[r.ingredient]}
-                  onCheckedChange={v => setChecked(prev => ({ ...prev, [r.ingredient]: Boolean(v) }))}
-                />
-                <Label htmlFor={`ing2-${idx}`}>{r.ingredient}</Label>
-              </div>
+          {(extraMaterials ?? recommendedMaterials).map((m, idx) => (
+            <div key={`${m.ingredient_name}-${idx}`} className="flex items-center gap-3">
+              <div className="flex-1">{m.ingredient_name}</div>
               <div className="flex items-center gap-2">
                 <Input
                   className="w-28"
                   type="number"
-                  value={qty[r.ingredient] || 0}
-                  onChange={e => setQty(prev => ({ ...prev, [r.ingredient]: Number.parseInt(e.target.value || "0", 10) }))}
+                  value={(extraMaterials ?? recommendedMaterials)[idx]?.reported_qty ?? 0}
+                  onChange={e => {
+                    const v = Number.parseInt(e.target.value || "0", 10);
+                    setExtraMaterials(cur => {
+                      const base = (cur && cur.length ? cur : recommendedMaterials).map(x => ({ ...x }));
+                      if (!base[idx]) {
+                        const rec = recommendedMaterials[idx] ?? m;
+                        base[idx] = { ...rec };
+                      }
+                      base[idx].reported_qty = Number.isFinite(v) ? v : 0;
+                      return base;
+                    });
+                  }}
                 />
-                <span className="text-sm opacity-70">g</span>
+                <span className="text-sm opacity-70">{m.unit || "g"}</span>
               </div>
             </div>
           ))}
           <div className="text-right text-sm">
-            作成量 合計：<span className="font-semibold">{formatGram(sum)}</span>
+            作成量 合計：<span className="font-semibold">{formatGram(extraTotalGrams)}</span>
           </div>
         </div>
         <div className="grid md:grid-cols-3 gap-3">
@@ -1818,7 +1888,7 @@ function OnsiteMakeDialog({
           <Button
             disabled={
               busy ||
-              sum <= 0 ||
+              extraTotalGrams <= 0 ||
               !manufacturedAt ||
               (useType === "oem" && !oemPartner) ||
               (outcome === "extra" && (!leftLoc || leftG <= 0)) ||
