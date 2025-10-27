@@ -294,6 +294,9 @@ export default function App() {
       manufacturedAt: string,
       oemPartner?: string,
       leftover?: { loc: string; grams: number },
+      lotId?: string,
+      materials?: MaterialLine[] | null,
+      packs?: number,
     ) => {
       if (onsiteBusy) return;
       if (!factoryCode || !flavorId || !manufacturedAt || producedG <= 0) {
@@ -314,6 +317,17 @@ export default function App() {
           leftover && leftover.grams > 0
             ? { location: leftover.loc, grams: leftover.grams }
             : null,
+        generated_lot_id: lotId,
+        materials: materials && materials.length
+          ? materials.map(m => ({
+              ingredient_id: m.ingredient_id ?? undefined,
+              ingredient_name: m.ingredient_name,
+              reported_qty: Number(m.reported_qty ?? 0),
+              unit: m.unit ?? "g",
+              store_location: m.store_location ?? undefined,
+            }))
+          : undefined,
+        packs: Number.isFinite(packs) ? Number(packs) : 0,
       };
       try {
         setOnsiteBusy(true);
@@ -838,6 +852,9 @@ function Floor({
     manufacturedAt: string,
     oemPartner?: string,
     leftover?: { loc: string; grams: number },
+    lotId?: string,
+    materials?: MaterialLine[] | null,
+    packs?: number,
   ) => Promise<void>;
   registerBusy: boolean;
   mastersLoading: boolean;
@@ -852,6 +869,7 @@ function Floor({
   const keepRequestIdRef = useRef<string | null>(null);
   const [madeBusy, setMadeBusy] = useState(false);
   const madeRequestIdRef = useRef<string | null>(null);
+  const seqRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
     if (!factories.length) {
@@ -868,6 +886,65 @@ function Floor({
 
   const orders = useMemo(() => normalizeOrders(ordersQuery.data), [ordersQuery.data]);
   const storageAgg = useMemo(() => normalizeStorage(storageAggQuery.data), [storageAggQuery.data]);
+
+  useEffect(() => {
+    const next = { ...seqRef.current };
+    orders.forEach(order => {
+      const lotId = order.lotId;
+      if (!lotId) return;
+      const match = /^([A-Z0-9]+)-(\d{8})-(\d+)$/.exec(lotId);
+      if (!match) return;
+      const [, factoryCode, datePart, suffix] = match;
+      const numeric = Number.parseInt(suffix, 10);
+      if (Number.isNaN(numeric)) return;
+      const key = `${factoryCode}-${datePart}`;
+      const candidate = numeric + 1;
+      if (!next[key] || next[key] < candidate) {
+        next[key] = candidate;
+      }
+    });
+    seqRef.current = next;
+  }, [orders]);
+
+  const handleExtraRegister = useCallback(
+    async (
+      factoryCode: string,
+      flavorId: string,
+      useType: "fissule" | "oem",
+      producedG: number,
+      manufacturedAt: string,
+      oemPartner?: string,
+      leftover?: { loc: string; grams: number },
+      _lotId?: string,
+      materials?: MaterialLine[] | null,
+      packs?: number,
+    ) => {
+      const parsed = manufacturedAt ? new Date(manufacturedAt) : new Date();
+      const date = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+      const dateSegment = format(date, "yyyyMMdd");
+      const key = `${factoryCode}-${dateSegment}`;
+      const seq = seqRef.current[key] ?? 1;
+      const lotId = genLotId(factoryCode, seq, date);
+      try {
+        await registerOnsiteMake(
+          factoryCode,
+          flavorId,
+          useType,
+          producedG,
+          manufacturedAt,
+          oemPartner,
+          leftover,
+          lotId,
+          materials,
+          packs,
+        );
+        seqRef.current[key] = seq + 1;
+      } catch (error) {
+        throw error;
+      }
+    },
+    [registerOnsiteMake],
+  );
 
   const purposeLabelByCode = useMemo(() => {
     const map: Record<string, string> = {};
@@ -1046,7 +1123,7 @@ function Floor({
         onClose={() => setExtraOpen(false)}
         defaultFlavorId={flavors[0]?.id ?? ""}
         factoryCode={factory}
-        onRegister={registerOnsiteMake}
+        onRegister={handleExtraRegister}
         busy={registerBusy}
         flavors={flavors}
         oemList={oemList}
@@ -1644,6 +1721,9 @@ function OnsiteMakeDialog({
     manufacturedAt: string,
     oemPartner?: string,
     leftover?: { loc: string; grams: number },
+    lotId?: string,
+    materials?: MaterialLine[] | null,
+    packs?: number,
   ) => Promise<void>;
   busy: boolean;
   flavors: FlavorWithRecipe[];
@@ -1739,6 +1819,17 @@ function OnsiteMakeDialog({
     if (busy) return;
     if (extraTotalGrams <= 0) return;
     const leftover = outcome === "extra" && leftLoc && leftG > 0 ? { loc: leftLoc, grams: leftG } : undefined;
+    const materialsToSend: MaterialLine[] = (extraMaterials ?? recommendedMaterials).map(m => {
+      const qty = Number(m.reported_qty ?? 0);
+      return {
+        ingredient_id: m.ingredient_id,
+        ingredient_name: m.ingredient_name,
+        reported_qty: Number.isFinite(qty) ? qty : 0,
+        unit: m.unit ?? "g",
+        store_location: m.store_location,
+        source: m.source ?? "entered",
+      };
+    });
     try {
       await onRegister(
         factoryCode,
@@ -1748,6 +1839,9 @@ function OnsiteMakeDialog({
         manufacturedAt,
         useType === "oem" ? oemPartner : undefined,
         leftover,
+        undefined,
+        materialsToSend,
+        extraPacks,
       );
       onClose();
     } catch {
