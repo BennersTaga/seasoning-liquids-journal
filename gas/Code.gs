@@ -491,6 +491,47 @@ function processRequestPath_(ss, path, data, e) {
   return body;
 }
 
+function createOnsiteMake_(body) {
+  var today = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd');
+  var lotId = String(body.lot_id || body.generated_lot_id || '').trim();
+  if (!lotId) {
+    throw new Error('lot_id is required for onsite-make');
+  }
+
+  var record = {
+    order_id: 'OS-' + Utilities.getUuid().slice(0, 8),
+    lot_id: lotId,
+    factory_code: body.factory_code,
+    ordered_at: body.manufactured_at || today,
+    flavor_id: body.flavor_id,
+    use_type: body.use_type,
+    use_code: body.use_code || '',
+    packs: Number(body.packs || 0),
+    required_grams: Number(body.produced_grams || 0),
+    oem_partner: body.oem_partner || '',
+    archived: 'TRUE',
+  };
+  appendByHeader_(sh_(SHEET.ORDERS), record);
+
+  var payload = {
+    grams: Number(body.produced_grams || 0),
+    packs: Number(body.packs || 0),
+    manufactured_at: body.manufactured_at || today,
+    materials: body.materials || undefined,
+    leftover: body.leftover || undefined,
+  };
+
+  appendActionAndLedger_({
+    type: 'MADE_SPLIT',
+    factory_code: body.factory_code,
+    lot_id: lotId,
+    flavor_id: body.flavor_id,
+    payload: payload,
+  });
+
+  return { ok: true, lot_id: lotId };
+}
+
 function readSheetObjects_(ss, name) {
   var sheet = ss.getSheetByName(name);
   if (!sheet) return [];
