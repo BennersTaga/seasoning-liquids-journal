@@ -1130,6 +1130,7 @@ function Floor({
         findFlavor={findFlavor}
         storageByFactory={storageByFactory}
         mastersLoading={mastersLoading}
+        uses={uses}
       />
     </div>
   );
@@ -1537,7 +1538,7 @@ function MadeDialog2({
       })
       .filter((m): m is MaterialLine => m !== null);
 
-    try {
+  try {
       await onReport({
         packs: packsValue,
         grams: gramsValue,
@@ -1708,6 +1709,7 @@ function OnsiteMakeDialog({
   findFlavor,
   storageByFactory,
   mastersLoading,
+  uses,
 }: {
   open: boolean;
   onClose: () => void;
@@ -1731,10 +1733,11 @@ function OnsiteMakeDialog({
   findFlavor: (id: string) => FlavorWithRecipe;
   storageByFactory: Record<string, string[]>;
   mastersLoading: boolean;
+  uses: { code: string; name: string; type: "fissule" | "oem" }[];
 }) {
   const [flavorId, setFlavorId] = useState(defaultFlavorId);
   const [manufacturedAt, setManufacturedAt] = useState(format(new Date(), "yyyy-MM-dd"));
-  const [useType, setUseType] = useState<"fissule" | "oem">("fissule");
+  const [useCode, setUseCode] = useState(uses[0]?.code ?? "");
   const [oemPartner, setOemPartner] = useState(oemList[0] ?? "");
   const [extraPacks, setExtraPacks] = useState<number>(0);
   const [extraMaterials, setExtraMaterials] = useState<MaterialLine[] | null>(null);
@@ -1743,7 +1746,10 @@ function OnsiteMakeDialog({
   const [leftG, setLeftG] = useState(0);
   const flavor = findFlavor(flavorId);
   const flavorDisabled = mastersLoading || flavors.length === 0;
+  const purposeDisabled = mastersLoading || uses.length === 0;
   const locations = storageByFactory[factoryCode] || [];
+  const selectedUse = useMemo(() => uses.find(u => u.code === useCode), [uses, useCode]);
+  const derivedUseType: "fissule" | "oem" = selectedUse?.type === "oem" ? "oem" : "fissule";
 
   const extraTotalGrams = useMemo(() => {
     const ptg = Number(flavor?.packToGram ?? 0);
@@ -1778,6 +1784,18 @@ function OnsiteMakeDialog({
   }, [flavorId]);
 
   useEffect(() => {
+    if (!uses.length) {
+      if (useCode !== "") {
+        setUseCode("");
+      }
+      return;
+    }
+    if (!useCode || !uses.some(u => u.code === useCode)) {
+      setUseCode(uses[0].code);
+    }
+  }, [uses, useCode]);
+
+  useEffect(() => {
     if (!open) return;
     setExtraMaterials(prev => {
       if (!recommendedMaterials.length) {
@@ -1804,7 +1822,7 @@ function OnsiteMakeDialog({
   useEffect(() => {
     if (open) {
       setFlavorId(defaultFlavorId);
-      setUseType("fissule");
+      setUseCode(uses[0]?.code ?? "");
       setOemPartner(oemList[0] ?? "");
       setOutcome("");
       setLeftLoc("");
@@ -1813,11 +1831,12 @@ function OnsiteMakeDialog({
       setExtraMaterials(null);
       setManufacturedAt(format(new Date(), "yyyy-MM-dd"));
     }
-  }, [open, defaultFlavorId, oemList]);
+  }, [open, defaultFlavorId, oemList, uses]);
 
   const submit = async () => {
     if (busy) return;
     if (extraTotalGrams <= 0) return;
+    if (!useCode) return;
     const leftover = outcome === "extra" && leftLoc && leftG > 0 ? { loc: leftLoc, grams: leftG } : undefined;
     const materialsToSend: MaterialLine[] = (extraMaterials ?? recommendedMaterials).map(m => {
       const qty = Number(m.reported_qty ?? 0);
@@ -1834,10 +1853,10 @@ function OnsiteMakeDialog({
       await onRegister(
         factoryCode,
         flavorId,
-        useType,
+        derivedUseType,
         extraTotalGrams,
         manufacturedAt,
-        useType === "oem" ? oemPartner : undefined,
+        derivedUseType === "oem" ? oemPartner : undefined,
         leftover,
         undefined,
         materialsToSend,
@@ -1875,13 +1894,18 @@ function OnsiteMakeDialog({
           </div>
           <div>
             <Label>用途</Label>
-            <Select value={useType} onValueChange={(value: "fissule" | "oem") => setUseType(value)}>
-              <SelectTrigger>
-                <SelectValue />
+            <Select value={useCode} onValueChange={setUseCode}>
+              <SelectTrigger disabled={purposeDisabled}>
+                <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="fissule">製品</SelectItem>
-                <SelectItem value="oem">OEM</SelectItem>
+                {uses.length
+                  ? uses.map(u => (
+                      <SelectItem key={u.code} value={u.code}>
+                        {u.name}
+                      </SelectItem>
+                    ))
+                  : selectFallback(mastersLoading)}
               </SelectContent>
             </Select>
           </div>
@@ -1984,7 +2008,8 @@ function OnsiteMakeDialog({
               busy ||
               extraTotalGrams <= 0 ||
               !manufacturedAt ||
-              (useType === "oem" && !oemPartner) ||
+              !useCode ||
+              (derivedUseType === "oem" && !oemPartner) ||
               (outcome === "extra" && (!leftLoc || leftG <= 0)) ||
               outcome === ""
             }
