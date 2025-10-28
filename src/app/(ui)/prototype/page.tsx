@@ -290,6 +290,7 @@ export default function App() {
       factoryCode: string,
       flavorId: string,
       useType: "fissule" | "oem",
+      useCode: string,
       producedG: number,
       manufacturedAt: string,
       oemPartner?: string,
@@ -306,10 +307,12 @@ export default function App() {
         onsiteRequestIdRef.current = genId();
       }
       const requestId = onsiteRequestIdRef.current as string;
+      const trimmedUseCode = useCode.trim();
       const payload = {
         factory_code: factoryCode,
         flavor_id: flavorId,
         use_type: useType,
+        use_code: trimmedUseCode,
         produced_grams: producedG,
         manufactured_at: manufacturedAt,
         oem_partner: useType === "oem" ? oemPartner ?? null : null,
@@ -848,6 +851,7 @@ function Floor({
     factoryCode: string,
     flavorId: string,
     useType: "fissule" | "oem",
+    useCode: string,
     producedG: number,
     manufacturedAt: string,
     oemPartner?: string,
@@ -911,6 +915,7 @@ function Floor({
       factoryCode: string,
       flavorId: string,
       useType: "fissule" | "oem",
+      useCode: string,
       producedG: number,
       manufacturedAt: string,
       oemPartner?: string,
@@ -930,6 +935,7 @@ function Floor({
           factoryCode,
           flavorId,
           useType,
+          useCode,
           producedG,
           manufacturedAt,
           oemPartner,
@@ -1538,7 +1544,7 @@ function MadeDialog2({
       })
       .filter((m): m is MaterialLine => m !== null);
 
-  try {
+    try {
       await onReport({
         packs: packsValue,
         grams: gramsValue,
@@ -1719,6 +1725,7 @@ function OnsiteMakeDialog({
     factoryCode: string,
     flavorId: string,
     useType: "fissule" | "oem",
+    useCode: string,
     producedG: number,
     manufacturedAt: string,
     oemPartner?: string,
@@ -1748,7 +1755,11 @@ function OnsiteMakeDialog({
   const flavorDisabled = mastersLoading || flavors.length === 0;
   const purposeDisabled = mastersLoading || uses.length === 0;
   const locations = storageByFactory[factoryCode] || [];
-  const selectedUse = useMemo(() => uses.find(u => u.code === useCode), [uses, useCode]);
+  const normalizedUseCode = useMemo(() => useCode.trim(), [useCode]);
+  const selectedUse = useMemo(
+    () => uses.find(u => u.code === normalizedUseCode) ?? uses.find(u => u.code === useCode),
+    [uses, normalizedUseCode, useCode],
+  );
   const derivedUseType: "fissule" | "oem" = selectedUse?.type === "oem" ? "oem" : "fissule";
 
   const extraTotalGrams = useMemo(() => {
@@ -1836,7 +1847,7 @@ function OnsiteMakeDialog({
   const submit = async () => {
     if (busy) return;
     if (extraTotalGrams <= 0) return;
-    if (!useCode) return;
+    if (!normalizedUseCode) return;
     const leftover = outcome === "extra" && leftLoc && leftG > 0 ? { loc: leftLoc, grams: leftG } : undefined;
     const materialsToSend: MaterialLine[] = (extraMaterials ?? recommendedMaterials).map(m => {
       const qty = Number(m.reported_qty ?? 0);
@@ -1854,6 +1865,7 @@ function OnsiteMakeDialog({
         factoryCode,
         flavorId,
         derivedUseType,
+        normalizedUseCode,
         extraTotalGrams,
         manufacturedAt,
         derivedUseType === "oem" ? oemPartner : undefined,
@@ -2008,7 +2020,7 @@ function OnsiteMakeDialog({
               busy ||
               extraTotalGrams <= 0 ||
               !manufacturedAt ||
-              !useCode ||
+              !normalizedUseCode ||
               (derivedUseType === "oem" && !oemPartner) ||
               (outcome === "extra" && (!leftLoc || leftG <= 0)) ||
               outcome === ""
