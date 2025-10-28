@@ -290,7 +290,6 @@ export default function App() {
       factoryCode: string,
       flavorId: string,
       useType: "fissule" | "oem",
-      useCode: string,
       producedG: number,
       manufacturedAt: string,
       oemPartner?: string,
@@ -311,7 +310,6 @@ export default function App() {
         factory_code: factoryCode,
         flavor_id: flavorId,
         use_type: useType,
-        use_code: useCode,
         produced_grams: producedG,
         manufactured_at: manufacturedAt,
         oem_partner: useType === "oem" ? oemPartner ?? null : null,
@@ -850,7 +848,6 @@ function Floor({
     factoryCode: string,
     flavorId: string,
     useType: "fissule" | "oem",
-    useCode: string,
     producedG: number,
     manufacturedAt: string,
     oemPartner?: string,
@@ -914,7 +911,6 @@ function Floor({
       factoryCode: string,
       flavorId: string,
       useType: "fissule" | "oem",
-      useCode: string,
       producedG: number,
       manufacturedAt: string,
       oemPartner?: string,
@@ -934,7 +930,6 @@ function Floor({
           factoryCode,
           flavorId,
           useType,
-          useCode,
           producedG,
           manufacturedAt,
           oemPartner,
@@ -1543,7 +1538,7 @@ function MadeDialog2({
       })
       .filter((m): m is MaterialLine => m !== null);
 
-    try {
+  try {
       await onReport({
         packs: packsValue,
         grams: gramsValue,
@@ -1724,7 +1719,6 @@ function OnsiteMakeDialog({
     factoryCode: string,
     flavorId: string,
     useType: "fissule" | "oem",
-    useCode: string,
     producedG: number,
     manufacturedAt: string,
     oemPartner?: string,
@@ -1860,7 +1854,6 @@ function OnsiteMakeDialog({
         factoryCode,
         flavorId,
         derivedUseType,
-        useCode,
         extraTotalGrams,
         manufacturedAt,
         derivedUseType === "oem" ? oemPartner : undefined,
