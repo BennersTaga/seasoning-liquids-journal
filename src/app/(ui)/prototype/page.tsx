@@ -98,11 +98,7 @@ const selectFallback = (loading: boolean, emptyLabel = "データなし") => (
 
 const formatNumber = (n: number) => n.toLocaleString();
 const formatGram = (n: number) => `${formatNumber(n)} g`;
-const formatPacks = (n: number) =>
-  (Number.isFinite(n) ? n : 0).toLocaleString(undefined, {
-    minimumFractionDigits: 1,
-    maximumFractionDigits: 1,
-  });
+const formatPacks = (n: number) => Math.round(Number.isFinite(n) ? n : 0).toLocaleString();
 const genId = () => globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2);
 const genLotId = (factoryCode: string, seq: number, d = new Date()) =>
   `${factoryCode}-${format(d, "yyyyMMdd")}-${String(seq).padStart(3, "0")}`;
@@ -1084,30 +1080,32 @@ function Floor({
           title="製造指示"
           icon={<ChefHat className="h-4 w-4" />}
           rightSlot={
-            <Button variant="outline" onClick={() => setExtraOpen(true)} className="gap-1">
+            <Button
+              variant="outline"
+              onClick={() => setExtraOpen(true)}
+              className="gap-1"
+              disabled={registerBusy || mastersLoading}
+            >
               <Plus className="h-4 w-4" />追加で作成
             </Button>
           }
         >
-          {openOrders.map(order => (
-            <OrderCardView
-              key={order.orderId}
-              order={order}
-              remainingPacks={Math.max(
-                0,
-                order.lines[0]?.packsRemaining ?? order.lines[0]?.packs ?? 0,
-              )}
-              onKeep={values => handleKeep(order, values)}
-              onReportMade={report => handleReportMade(order, report)}
+          {openOrders.length > 0 ? (
+            <FloorTableView
+              orders={openOrders}
+              storageAgg={storageAgg}
+              purposeLabelByCode={purposeLabelByCode}
               findFlavor={findFlavor}
               storageByFactory={storageByFactory}
               mastersLoading={mastersLoading}
-              purposeLabelByCode={purposeLabelByCode}
               keepBusy={keepBusy}
               reportBusy={madeBusy}
+              onKeep={(order, values) => handleKeep(order, values)}
+              onReportMade={(order, report) => handleReportMade(order, report)}
             />
-          ))}
-          {openOrders.length === 0 && <Empty>ここにカードが表示されます</Empty>}
+          ) : (
+            <Empty>ここにカードが表示されます</Empty>
+          )}
         </KanbanColumn>
         <KanbanColumn title="保管（在庫）" icon={<Warehouse className="h-4 w-4" />}>
           {storageAgg.map(agg => (
@@ -1167,6 +1165,263 @@ function KanbanColumn({
         {children}
       </CardContent>
     </Card>
+  );
+}
+
+type FloorTableViewProps = {
+  orders: OrderCard[];
+  storageAgg: StorageAggEntry[];
+  purposeLabelByCode: Record<string, string>;
+  findFlavor: (flavorId: string) => FlavorWithRecipe | undefined;
+  storageByFactory: Record<string, string[]>;
+  mastersLoading: boolean;
+  keepBusy: boolean;
+  reportBusy: boolean;
+  onKeep: (order: OrderCard, values: KeepFormValues) => Promise<void>;
+  onReportMade: (order: OrderCard, report: MadeReport) => Promise<void>;
+};
+
+type StatusType = "指示" | "製造中" | "製造完了" | "保管中" | "全量使用";
+
+const statusStyles: Record<StatusType, string> = {
+  指示: "bg-slate-200 text-slate-700",
+  製造中: "bg-blue-100 text-blue-700",
+  製造完了: "bg-emerald-100 text-emerald-700",
+  保管中: "bg-violet-100 text-violet-700",
+  全量使用: "bg-slate-100 text-slate-500",
+};
+
+function StatusPill({ status }: { status: StatusType }) {
+  return (
+    <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${statusStyles[status]}`}>
+      {status}
+    </span>
+  );
+}
+
+function QtyCell({ grams, packsLabel }: { grams: number; packsLabel?: string }) {
+  return (
+    <div className="leading-tight space-y-1">
+      <div className="font-semibold">{formatGram(grams)}</div>
+      <div className="text-xs text-muted-foreground">{packsLabel ?? "-"}</div>
+    </div>
+  );
+}
+
+function FloorTableRow({
+  order,
+  storageEntry,
+  purposeLabelByCode,
+  findFlavor,
+  storageByFactory,
+  mastersLoading,
+  keepBusy,
+  reportBusy,
+  onKeep,
+  onReportMade,
+}: {
+  order: OrderCard;
+  storageEntry?: StorageAggEntry;
+  purposeLabelByCode: Record<string, string>;
+  findFlavor: (flavorId: string) => FlavorWithRecipe | undefined;
+  storageByFactory: Record<string, string[]>;
+  mastersLoading: boolean;
+  keepBusy: boolean;
+  reportBusy: boolean;
+  onKeep: (order: OrderCard, values: KeepFormValues) => Promise<void>;
+  onReportMade: (order: OrderCard, report: MadeReport) => Promise<void>;
+}) {
+  const [open, setOpen] = useState<null | "keep" | "made" | "skip" | "choice" | "split">(null);
+  const line = order.lines[0];
+  const flavor = findFlavor(line.flavorId);
+  const packToGram = flavor?.packToGram ?? 0;
+  const remainingPacks = Math.max(0, line.packsRemaining ?? line.packs ?? 0);
+  const shouldPacks = line.useType === "fissule" ? line.packs ?? 0 : undefined;
+  const madePacks =
+    line.useType === "fissule" && Number.isFinite(line.packs) && Number.isFinite(line.packsRemaining)
+      ? Math.max(0, (line.packs ?? 0) - (line.packsRemaining ?? 0))
+      : 0;
+  const leftoverGrams = storageEntry?.grams ?? 0;
+  const status: StatusType = (() => {
+    if (leftoverGrams > 0) return "保管中";
+    if (shouldPacks !== undefined && madePacks >= shouldPacks && order.archived) return "全量使用";
+    if (shouldPacks !== undefined && madePacks >= shouldPacks) return "製造完了";
+    if (madePacks > 0 && (shouldPacks === undefined || madePacks < shouldPacks)) return "製造中";
+    return "指示";
+  })();
+
+  const purposeLabel = line.useCode ? purposeLabelByCode[line.useCode] ?? line.useCode : "-";
+  const madeGrams = line.useType === "fissule" ? madePacks * packToGram : line.requiredGrams;
+  const leftoverPacksLabel = storageEntry?.packsEquiv !== undefined
+    ? `${formatPacks(storageEntry.packsEquiv)}パック分`
+    : undefined;
+
+  const reset = () => setOpen(null);
+  const canSplit = line.useType === "fissule" && (line.packs ?? 0) > 0;
+
+  return (
+    <>
+      <tr className="align-top">
+        <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">{order.orderedAt}</td>
+        <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">
+          {storageEntry?.manufacturedAt || "-"}
+        </td>
+        <td className="px-4 py-3 text-sm text-slate-700">
+          <div className="font-semibold">{flavor?.flavorName ?? line.flavorId}</div>
+          <div className="text-xs text-muted-foreground">{order.lotId}</div>
+        </td>
+        <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">{purposeLabel}</td>
+        <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">
+          <StatusPill status={status} />
+        </td>
+        <td className="px-4 py-3 text-sm text-slate-700">
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={() => setOpen("keep")}>保管</Button>
+            <Button size="sm" onClick={() => setOpen("choice")}>作った</Button>
+            <Button variant="secondary" size="sm" onClick={() => setOpen("skip")}>作らない</Button>
+          </div>
+        </td>
+        <td className="px-4 py-3 text-sm text-slate-700">
+          <QtyCell
+            grams={line.requiredGrams ?? 0}
+            packsLabel={
+              line.useType === "fissule" ? `${formatPacks(line.packs ?? 0)}パック分` : "OEM"
+            }
+          />
+        </td>
+        <td className="px-4 py-3 text-sm text-slate-700">
+          <QtyCell
+            grams={madeGrams}
+            packsLabel={line.useType === "fissule" ? `${formatPacks(madePacks)}パック分` : "-"}
+          />
+        </td>
+        <td className="px-4 py-3 text-sm text-slate-700">
+          <QtyCell grams={leftoverGrams} packsLabel={leftoverPacksLabel} />
+        </td>
+        <td className="px-4 py-3 text-sm text-slate-700">
+          {storageEntry?.locations?.length ? storageEntry.locations.join(" / ") : "-"}
+        </td>
+      </tr>
+      <KeepDialog
+        open={open === "keep"}
+        onClose={reset}
+        factoryCode={order.factoryCode}
+        storageByFactory={storageByFactory}
+        onSubmit={values => onKeep(order, values)}
+        mastersLoading={mastersLoading}
+        busy={keepBusy}
+      />
+      <MadeDialog2
+        open={open === "made"}
+        mode="bulk"
+        onClose={reset}
+        order={order}
+        remaining={remainingPacks}
+        onReport={report => onReportMade(order, report)}
+        findFlavor={id => findFlavor(id) ?? defaultFlavor}
+        storageByFactory={storageByFactory}
+        mastersLoading={mastersLoading}
+        busy={reportBusy}
+      />
+      <MadeChoiceDialog
+        open={open === "choice"}
+        onClose={reset}
+        canSplit={canSplit}
+        onBulk={() => setOpen("made")}
+        onSplit={() => setOpen("split")}
+      />
+      <MadeDialog2
+        open={open === "split"}
+        mode="split"
+        onClose={reset}
+        order={order}
+        remaining={remainingPacks}
+        onReport={report => onReportMade(order, report)}
+        findFlavor={id => findFlavor(id) ?? defaultFlavor}
+        storageByFactory={storageByFactory}
+        mastersLoading={mastersLoading}
+        busy={reportBusy}
+      />
+      <Dialog open={open === "skip"} onOpenChange={o => { if (!o) reset(); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>作らない理由（任意）</DialogTitle>
+          </DialogHeader>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function FloorTableView({
+  orders,
+  storageAgg,
+  purposeLabelByCode,
+  findFlavor,
+  storageByFactory,
+  mastersLoading,
+  keepBusy,
+  reportBusy,
+  onKeep,
+  onReportMade,
+}: FloorTableViewProps) {
+  const storageMap = useMemo(() => {
+    const map: Record<string, StorageAggEntry> = {};
+    storageAgg.forEach(entry => {
+      map[`${entry.lotId}-${entry.flavorId}`] = entry;
+    });
+    return map;
+  }, [storageAgg]);
+
+  if (!orders.length) {
+    return (
+      <div className="overflow-auto rounded-xl border border-slate-200 bg-white p-6 text-center text-sm text-muted-foreground">
+        表示できるデータがありません
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-auto rounded-xl border border-slate-200 bg-white">
+      <table className="min-w-full text-sm">
+        <thead className="sticky top-0 bg-amber-50 text-slate-700">
+          <tr>
+            <th className="px-4 py-3 text-left font-semibold">製造指示日</th>
+            <th className="px-4 py-3 text-left font-semibold">製造日</th>
+            <th className="px-4 py-3 text-left font-semibold">味付け</th>
+            <th className="px-4 py-3 text-left font-semibold">用途</th>
+            <th className="px-4 py-3 text-left font-semibold">ステータス</th>
+            <th className="px-4 py-3 text-left font-semibold">操作</th>
+            <th className="px-4 py-3 text-left font-semibold">製造すべき</th>
+            <th className="px-4 py-3 text-left font-semibold">製造した</th>
+            <th className="px-4 py-3 text-left font-semibold">余り</th>
+            <th className="px-4 py-3 text-left font-semibold">保管場所</th>
+          </tr>
+        </thead>
+        <tbody className="[&>tr:nth-child(even)]:bg-orange-50/40">
+          {orders.map(order => {
+            const line = order.lines[0];
+            const key = `${order.lotId}-${line.flavorId}`;
+            const storageEntry = storageMap[key];
+            return (
+              <FloorTableRow
+                key={order.orderId}
+                order={order}
+                storageEntry={storageEntry}
+                purposeLabelByCode={purposeLabelByCode}
+                findFlavor={findFlavor}
+                storageByFactory={storageByFactory}
+                mastersLoading={mastersLoading}
+                keepBusy={keepBusy}
+                reportBusy={reportBusy}
+                onKeep={onKeep}
+                onReportMade={onReportMade}
+              />
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
