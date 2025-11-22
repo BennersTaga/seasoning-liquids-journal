@@ -81,6 +81,16 @@ type MadeReport = {
 
 type KeepFormValues = { location: string; grams: number; manufacturedAt: string };
 
+const EMPTY_MASTERS: Masters = {
+  factories: [],
+  locations: [],
+  uses: [],
+  use_flavors: [],
+  flavors: [],
+  recipes: [],
+  oem_partners: [],
+};
+
 const defaultFlavor: FlavorWithRecipe = {
   id: "",
   flavorName: "未設定",
@@ -268,19 +278,6 @@ export default function App() {
     [flavors],
   );
 
-  const calcExpiry = useCallback(
-    (manufacturedAt: string, flavorId: string) => {
-      const flavor = findFlavor(flavorId);
-      const days = flavor?.expiryDays ?? 0;
-      if (!manufacturedAt) return "-";
-      const d = new Date(manufacturedAt);
-      if (Number.isNaN(d.getTime())) return "-";
-      d.setDate(d.getDate() + days);
-      return format(d, "yyyy-MM-dd");
-    },
-    [findFlavor],
-  );
-
   const registerOnsiteMake = useCallback(
     async (
       factoryCode: string,
@@ -393,13 +390,12 @@ export default function App() {
         </TabsContent>
         <TabsContent value="floor" className="mt-6">
           <Floor
-            masters={mastersData ?? ({ factories: [], uses: [], flavors: [] } as Masters)}
+            masters={mastersData ?? EMPTY_MASTERS}
             factories={factories}
             flavors={flavors}
             findFlavor={findFlavor}
             storageByFactory={storageByFactory}
             oemList={oemList}
-            calcExpiry={calcExpiry}
             registerOnsiteMake={registerOnsiteMake}
             registerBusy={onsiteBusy}
             mastersLoading={mastersLoading}
@@ -831,7 +827,6 @@ function Floor({
   findFlavor,
   storageByFactory,
   oemList,
-  calcExpiry,
   registerOnsiteMake,
   registerBusy,
   mastersLoading,
@@ -845,7 +840,6 @@ function Floor({
   findFlavor: (id: string) => FlavorWithRecipe;
   storageByFactory: Record<string, string[]>;
   oemList: string[];
-  calcExpiry: (manufacturedAt: string, flavorId: string) => string;
   registerOnsiteMake: (
     factoryCode: string,
     flavorId: string,
@@ -888,7 +882,6 @@ function Floor({
   const storageAggQuery = useStorageAgg(factory || undefined);
 
   const orders = useMemo(() => normalizeOrders(ordersQuery.data), [ordersQuery.data]);
-  const storageAgg = useMemo(() => normalizeStorage(storageAggQuery.data), [storageAggQuery.data]);
 
   useEffect(() => {
     const next = { ...seqRef.current };
@@ -1266,8 +1259,10 @@ function FloorTable({
           : "製品";
 
       const madeGrams = packToGram > 0 && madePacks > 0 ? madePacks * packToGram : undefined;
-      const leftoverPacks = Number.isFinite(storageEntry?.packs_equiv as number)
-        ? storageEntry?.packs_equiv
+      const hasPacksEquiv =
+        typeof storageEntry?.packs_equiv === "number" && Number.isFinite(storageEntry.packs_equiv);
+      const leftoverPacks = hasPacksEquiv
+        ? (storageEntry?.packs_equiv as number)
         : packToGram > 0 && leftoverGrams > 0
           ? leftoverGrams / packToGram
           : undefined;
@@ -1516,125 +1511,6 @@ const Field = ({ label, children }: { label: string; children: React.ReactNode }
 );
 
 /* ===== 各種ダイアログ/カード ===== */
-
-function OrderCardView({
-  order,
-  remainingPacks,
-  onKeep,
-  onReportMade,
-  findFlavor,
-  storageByFactory,
-  mastersLoading,
-  purposeLabelByCode,
-  keepBusy,
-  reportBusy,
-}: {
-  order: OrderCard;
-  remainingPacks: number;
-  onKeep: (values: KeepFormValues) => Promise<void>;
-  onReportMade: (report: MadeReport) => Promise<void>;
-  findFlavor: (id: string) => FlavorWithRecipe;
-  storageByFactory: Record<string, string[]>;
-  mastersLoading: boolean;
-  purposeLabelByCode: Record<string, string>;
-  keepBusy: boolean;
-  reportBusy: boolean;
-}) {
-  const [open, setOpen] = useState<null | "keep" | "made" | "skip" | "choice" | "split">(null);
-  const line = order.lines[0];
-  const flavor = findFlavor(line.flavorId);
-  const reset = () => setOpen(null);
-  const canSplit = line.useType === "fissule" && (line.packs ?? 0) > 0;
-
-  return (
-    <Card className="border rounded-xl">
-      <CardContent className="pt-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="font-medium">
-            {order.lotId}{" "}
-            <Badge variant="secondary" className="ml-2">
-              {order.factoryCode}
-            </Badge>
-          </div>
-          <div className="text-xs opacity-70">指示日 {order.orderedAt}</div>
-        </div>
-        <div className="text-sm grid gap-3">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Field label="味付け">{flavor.flavorName}</Field>
-            <Field label="用途">
-              {(() => {
-                const label = line.useCode ? purposeLabelByCode[line.useCode] ?? line.useCode : "-";
-                return label;
-              })()}
-            </Field>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Field label={line.useType === "fissule" ? "残りパック数" : "OEM先"}>
-              {line.useType === "fissule"
-                ? formatPacks(remainingPacks)
-                : line.oemPartner ?? "-"}
-            </Field>
-            <Field label="必要量">
-              <span className="font-semibold">{formatGram(line.requiredGrams ?? 0)}</span>
-            </Field>
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={() => setOpen("keep")}>保管</Button>
-          <Button onClick={() => setOpen("choice")}>作った</Button>
-          <Button variant="secondary" onClick={() => setOpen("skip")}>作らない</Button>
-        </div>
-      </CardContent>
-      <KeepDialog
-        open={open === "keep"}
-        onClose={reset}
-        factoryCode={order.factoryCode}
-        storageByFactory={storageByFactory}
-        onSubmit={onKeep}
-        mastersLoading={mastersLoading}
-        busy={keepBusy}
-      />
-      <MadeDialog2
-        open={open === "made"}
-        mode="bulk"
-        onClose={reset}
-        order={order}
-        remaining={remainingPacks}
-        onReport={onReportMade}
-        findFlavor={findFlavor}
-        storageByFactory={storageByFactory}
-        mastersLoading={mastersLoading}
-        busy={reportBusy}
-      />
-      <MadeChoiceDialog
-        open={open === "choice"}
-        onClose={reset}
-        canSplit={canSplit}
-        onBulk={() => setOpen("made")}
-        onSplit={() => setOpen("split")}
-      />
-      <MadeDialog2
-        open={open === "split"}
-        mode="split"
-        onClose={reset}
-        order={order}
-        remaining={remainingPacks}
-        onReport={onReportMade}
-        findFlavor={findFlavor}
-        storageByFactory={storageByFactory}
-        mastersLoading={mastersLoading}
-        busy={reportBusy}
-      />
-      <Dialog open={open === "skip"} onOpenChange={o => { if (!o) reset(); }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>作らない理由（任意）</DialogTitle>
-          </DialogHeader>
-        </DialogContent>
-      </Dialog>
-    </Card>
-  );
-}
 
 function MadeChoiceDialog({
   open,
