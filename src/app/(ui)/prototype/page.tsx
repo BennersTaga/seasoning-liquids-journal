@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Package, Warehouse, Archive, Beaker, Factory, Trash2, Boxes, ChefHat } from "lucide-react";
+import { Plus, Package, Warehouse, Archive, Beaker, Factory, Trash2, Boxes } from "lucide-react";
 import { format } from "date-fns";
 import { mutate } from "swr";
 
@@ -81,6 +81,16 @@ type MadeReport = {
 
 type KeepFormValues = { location: string; grams: number; manufacturedAt: string };
 
+const EMPTY_MASTERS: Masters = {
+  factories: [],
+  locations: [],
+  uses: [],
+  use_flavors: [],
+  flavors: [],
+  recipes: [],
+  oem_partners: [],
+};
+
 const defaultFlavor: FlavorWithRecipe = {
   id: "",
   flavorName: "未設定",
@@ -98,11 +108,7 @@ const selectFallback = (loading: boolean, emptyLabel = "データなし") => (
 
 const formatNumber = (n: number) => n.toLocaleString();
 const formatGram = (n: number) => `${formatNumber(n)} g`;
-const formatPacks = (n: number) =>
-  (Number.isFinite(n) ? n : 0).toLocaleString(undefined, {
-    minimumFractionDigits: 1,
-    maximumFractionDigits: 1,
-  });
+const formatPacks = (n: number) => Math.round(Number.isFinite(n) ? n : 0).toLocaleString();
 const genId = () => globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2);
 const genLotId = (factoryCode: string, seq: number, d = new Date()) =>
   `${factoryCode}-${format(d, "yyyyMMdd")}-${String(seq).padStart(3, "0")}`;
@@ -272,19 +278,6 @@ export default function App() {
     [flavors],
   );
 
-  const calcExpiry = useCallback(
-    (manufacturedAt: string, flavorId: string) => {
-      const flavor = findFlavor(flavorId);
-      const days = flavor?.expiryDays ?? 0;
-      if (!manufacturedAt) return "-";
-      const d = new Date(manufacturedAt);
-      if (Number.isNaN(d.getTime())) return "-";
-      d.setDate(d.getDate() + days);
-      return format(d, "yyyy-MM-dd");
-    },
-    [findFlavor],
-  );
-
   const registerOnsiteMake = useCallback(
     async (
       factoryCode: string,
@@ -397,12 +390,12 @@ export default function App() {
         </TabsContent>
         <TabsContent value="floor" className="mt-6">
           <Floor
+            masters={mastersData ?? EMPTY_MASTERS}
             factories={factories}
             flavors={flavors}
             findFlavor={findFlavor}
             storageByFactory={storageByFactory}
             oemList={oemList}
-            calcExpiry={calcExpiry}
             registerOnsiteMake={registerOnsiteMake}
             registerBusy={onsiteBusy}
             mastersLoading={mastersLoading}
@@ -828,12 +821,12 @@ function Office({
 /* ===== Floor タブ ===== */
 
 function Floor({
+  masters,
   factories,
   flavors,
   findFlavor,
   storageByFactory,
   oemList,
-  calcExpiry,
   registerOnsiteMake,
   registerBusy,
   mastersLoading,
@@ -841,12 +834,12 @@ function Floor({
   onRequestError,
   onRequestSuccess,
 }: {
+  masters: Masters;
   factories: { code: string; name: string }[];
   flavors: FlavorWithRecipe[];
   findFlavor: (id: string) => FlavorWithRecipe;
   storageByFactory: Record<string, string[]>;
   oemList: string[];
-  calcExpiry: (manufacturedAt: string, flavorId: string) => string;
   registerOnsiteMake: (
     factoryCode: string,
     flavorId: string,
@@ -889,7 +882,6 @@ function Floor({
   const storageAggQuery = useStorageAgg(factory || undefined);
 
   const orders = useMemo(() => normalizeOrders(ordersQuery.data), [ordersQuery.data]);
-  const storageAgg = useMemo(() => normalizeStorage(storageAggQuery.data), [storageAggQuery.data]);
 
   useEffect(() => {
     const next = { ...seqRef.current };
@@ -959,11 +951,6 @@ function Floor({
     });
     return map;
   }, [uses]);
-
-  const openOrders = useMemo(
-    () => orders.filter(order => !order.archived && order.factoryCode === factory),
-    [orders, factory],
-  );
 
   const handleKeep = useCallback(
     async (order: OrderCard, values: KeepFormValues) => {
@@ -1060,84 +1047,82 @@ function Floor({
     [madeBusy, onRequestError, onRequestSuccess],
   );
 
+  const orderCardById = useMemo(() => {
+    const map = new Map<string, OrderCard>();
+    orders.forEach(order => {
+      map.set(order.orderId, order);
+    });
+    return map;
+  }, [orders]);
+
   return (
-    <div className="grid md:grid-cols-2 gap-6 items-start">
-      <div className="flex items-center gap-3">
-        <Label>製造場所</Label>
-        <Select value={factory} onValueChange={setFactory}>
-          <SelectTrigger className="w-56" disabled={factoryDisabled}>
-            <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
-          </SelectTrigger>
-          <SelectContent>
-            {factories.length
-              ? factories.map(f => (
-                  <SelectItem key={f.code} value={f.code}>
-                    {f.name}（{f.code}）
-                  </SelectItem>
-                ))
-              : selectFallback(mastersLoading)}
-          </SelectContent>
-        </Select>
+    <div className="min-h-screen bg-[#FFF4EA] p-6">
+      <div className="mx-auto max-w-[1280px] space-y-3">
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-lg font-semibold">現場（フロア）— テーブル表示</h2>
+          <div className="text-xs text-slate-500">既存API構造を流用したテーブルUI</div>
+        </div>
+
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-2">
+            <Label className="text-sm text-slate-600">製造場所</Label>
+            <Select value={factory} onValueChange={setFactory}>
+              <SelectTrigger className="w-56" disabled={factoryDisabled}>
+                <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
+              </SelectTrigger>
+              <SelectContent>
+                {factories.length
+                  ? factories.map(f => (
+                      <SelectItem key={f.code} value={f.code}>
+                        {f.name}（{f.code}）
+                      </SelectItem>
+                    ))
+                  : selectFallback(mastersLoading)}
+              </SelectContent>
+            </Select>
+          </div>
+          <Button
+            className="rounded-md border border-amber-300 bg-amber-100 px-3 py-1 text-amber-800 shadow hover:bg-amber-200"
+            onClick={() => setExtraOpen(true)}
+            disabled={registerBusy || mastersLoading}
+          >
+            ＋ 追加で作成
+          </Button>
+        </div>
+
+        <FloorTable
+          masters={masters}
+          orders={ordersQuery.data ?? []}
+          storageAgg={storageAggQuery.data ?? []}
+          purposeLabelByCode={purposeLabelByCode}
+          findFlavor={findFlavor}
+          storageByFactory={storageByFactory}
+          mastersLoading={mastersLoading}
+          keepBusy={keepBusy}
+          reportBusy={madeBusy}
+          orderCardById={orderCardById}
+          onKeep={(order, values) => handleKeep(order, values)}
+          onReportMade={(order, report) => handleReportMade(order, report)}
+        />
+
+        <div className="text-xs text-slate-500">UIのみのモック / 既存API構造前提</div>
+
+        {/* 現場追加作成ダイアログ */}
+        <OnsiteMakeDialog
+          open={extraOpen}
+          onClose={() => setExtraOpen(false)}
+          defaultFlavorId={flavors[0]?.id ?? ""}
+          factoryCode={factory}
+          onRegister={handleExtraRegister}
+          busy={registerBusy}
+          flavors={flavors}
+          oemList={oemList}
+          findFlavor={findFlavor}
+          storageByFactory={storageByFactory}
+          mastersLoading={mastersLoading}
+          uses={uses}
+        />
       </div>
-      <div className="md:col-span-2 grid md:grid-cols-2 gap-6">
-        <KanbanColumn
-          title="製造指示"
-          icon={<ChefHat className="h-4 w-4" />}
-          rightSlot={
-            <Button variant="outline" onClick={() => setExtraOpen(true)} className="gap-1">
-              <Plus className="h-4 w-4" />追加で作成
-            </Button>
-          }
-        >
-          {openOrders.map(order => (
-            <OrderCardView
-              key={order.orderId}
-              order={order}
-              remainingPacks={Math.max(
-                0,
-                order.lines[0]?.packsRemaining ?? order.lines[0]?.packs ?? 0,
-              )}
-              onKeep={values => handleKeep(order, values)}
-              onReportMade={report => handleReportMade(order, report)}
-              findFlavor={findFlavor}
-              storageByFactory={storageByFactory}
-              mastersLoading={mastersLoading}
-              purposeLabelByCode={purposeLabelByCode}
-              keepBusy={keepBusy}
-              reportBusy={madeBusy}
-            />
-          ))}
-          {openOrders.length === 0 && <Empty>ここにカードが表示されます</Empty>}
-        </KanbanColumn>
-        <KanbanColumn title="保管（在庫）" icon={<Warehouse className="h-4 w-4" />}>
-          {storageAgg.map(agg => (
-            <StorageCardView
-              key={agg.lotId}
-              agg={agg}
-              findFlavor={findFlavor}
-              calcExpiry={calcExpiry}
-              factoryCode={factory}
-              onRequestError={onRequestError}
-              onRequestSuccess={onRequestSuccess}
-            />
-          ))}
-          {storageAgg.length === 0 && <Empty>余剰の在庫はここに集計されます</Empty>}
-        </KanbanColumn>
-      </div>
-      <OnsiteMakeDialog
-        open={extraOpen}
-        onClose={() => setExtraOpen(false)}
-        defaultFlavorId={flavors[0]?.id ?? ""}
-        factoryCode={factory}
-        onRegister={handleExtraRegister}
-        busy={registerBusy}
-        flavors={flavors}
-        oemList={oemList}
-        findFlavor={findFlavor}
-        storageByFactory={storageByFactory}
-        mastersLoading={mastersLoading}
-        uses={uses}
-      />
     </div>
   );
 }
@@ -1170,95 +1155,284 @@ function KanbanColumn({
   );
 }
 
-const Empty = ({ children }: { children: React.ReactNode }) => (
-  <div className="text-sm text-muted-foreground border rounded-xl p-6 text-center">{children}</div>
-);
+type FloorTableProps = {
+  masters: Masters;
+  orders: OrderRow[];
+  storageAgg: StorageAggRow[];
+  purposeLabelByCode: Record<string, string>;
+  findFlavor: (flavorId: string) => FlavorWithRecipe | undefined;
+  storageByFactory: Record<string, string[]>;
+  mastersLoading: boolean;
+  keepBusy: boolean;
+  reportBusy: boolean;
+  orderCardById: Map<string, OrderCard>;
+  onKeep: (order: OrderCard, values: KeepFormValues) => Promise<void>;
+  onReportMade: (order: OrderCard, report: MadeReport) => Promise<void>;
+};
 
-const Field = ({ label, children }: { label: string; children: React.ReactNode }) => (
-  <div className="space-y-1 min-w-[120px]">
-    <div className="inline-flex items-center rounded-md bg-slate-800 text-white px-2 py-0.5 text-[11px] tracking-wide">
-      {label}
+type StatusType = "指示" | "製造中" | "製造完了" | "保管中" | "全量使用";
+
+const statusStyles: Record<StatusType, string> = {
+  指示: "bg-slate-200 text-slate-700",
+  製造中: "bg-blue-100 text-blue-700",
+  製造完了: "bg-emerald-100 text-emerald-700",
+  保管中: "bg-violet-100 text-violet-700",
+  全量使用: "bg-slate-100 text-slate-500",
+};
+
+function StatusPill({ status }: { status: StatusType }) {
+  return (
+    <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${statusStyles[status]}`}>
+      {status}
+    </span>
+  );
+}
+
+function QtyCell({ grams, packsLabel }: { grams?: number | null; packsLabel?: string }) {
+  const gramText = Number.isFinite(grams as number) ? formatGram(grams ?? 0) : "-";
+  return (
+    <div className="leading-tight space-y-1">
+      <div className="font-semibold">{gramText}</div>
+      <div className="text-xs text-muted-foreground">{packsLabel ?? "-"}</div>
     </div>
-    <div className="text-sm font-medium leading-tight">{children}</div>
-  </div>
-);
+  );
+}
 
-/* ===== 各種ダイアログ/カード ===== */
-
-function OrderCardView({
-  order,
-  remainingPacks,
-  onKeep,
-  onReportMade,
+function FloorTable({
+  masters,
+  orders,
+  storageAgg,
+  purposeLabelByCode,
   findFlavor,
   storageByFactory,
   mastersLoading,
-  purposeLabelByCode,
   keepBusy,
   reportBusy,
-}: {
-  order: OrderCard;
-  remainingPacks: number;
-  onKeep: (values: KeepFormValues) => Promise<void>;
-  onReportMade: (report: MadeReport) => Promise<void>;
-  findFlavor: (id: string) => FlavorWithRecipe;
-  storageByFactory: Record<string, string[]>;
-  mastersLoading: boolean;
-  purposeLabelByCode: Record<string, string>;
-  keepBusy: boolean;
-  reportBusy: boolean;
-}) {
-  const [open, setOpen] = useState<null | "keep" | "made" | "skip" | "choice" | "split">(null);
-  const line = order.lines[0];
-  const flavor = findFlavor(line.flavorId);
-  const reset = () => setOpen(null);
-  const canSplit = line.useType === "fissule" && (line.packs ?? 0) > 0;
+  orderCardById,
+  onKeep,
+  onReportMade,
+}: FloorTableProps) {
+  const flavorMap = useMemo(() => {
+    const map = new Map<string, { name: string; packToGram: number }>();
+    masters.flavors?.forEach(f => {
+      map.set(f.flavor_id, { name: f.flavor_name, packToGram: f.pack_to_gram });
+    });
+    return map;
+  }, [masters]);
+
+  const storageMap = useMemo(() => {
+    const map = new Map<string, StorageAggRow>();
+    storageAgg.forEach(entry => {
+      map.set(`${entry.lot_id}-${entry.flavor_id}`, entry);
+    });
+    return map;
+  }, [storageAgg]);
+
+  const rows = useMemo(() => {
+    return (orders ?? []).filter(o => !o.archived).map(row => {
+      const flavor = flavorMap.get(row.flavor_id);
+      const packToGram = flavor?.packToGram ?? 0;
+      const storageEntry = storageMap.get(`${row.lot_id}-${row.flavor_id}`);
+      const shouldPacks =
+        (row.use_type ?? "").toLowerCase() === "oem"
+          ? undefined
+          : Number.isFinite(row.packs)
+            ? Number(row.packs)
+            : undefined;
+      const madePacks = Number.isFinite(row.made_packs as number)
+        ? Number(row.made_packs)
+        : Number.isFinite(row.packs as number) && Number.isFinite(row.packs_remaining as number)
+          ? Math.max(0, (row.packs as number) - (row.packs_remaining as number))
+          : 0;
+      const leftoverGrams = storageEntry?.grams ?? 0;
+      const status: StatusType = (() => {
+        if (leftoverGrams > 0) return "保管中";
+        if (shouldPacks !== undefined && madePacks >= shouldPacks && row.archived) return "全量使用";
+        if (shouldPacks !== undefined && madePacks >= shouldPacks) return "製造完了";
+        if (madePacks > 0 && (shouldPacks === undefined || madePacks < shouldPacks)) return "製造中";
+        return "指示";
+      })();
+
+      const useLabel = row.use_code
+        ? purposeLabelByCode[row.use_code] ?? row.use_code
+        : (row.use_type ?? "").toLowerCase() === "oem"
+          ? "OEM"
+          : "製品";
+
+      const madeGrams = packToGram > 0 && madePacks > 0 ? madePacks * packToGram : undefined;
+      const hasPacksEquiv =
+        typeof storageEntry?.packs_equiv === "number" && Number.isFinite(storageEntry.packs_equiv);
+      const leftoverPacks = hasPacksEquiv
+        ? (storageEntry?.packs_equiv as number)
+        : packToGram > 0 && leftoverGrams > 0
+          ? leftoverGrams / packToGram
+          : undefined;
+
+      return {
+        row,
+        card: orderCardById.get(row.order_id),
+        flavorName: flavor?.name ?? row.flavor_id,
+        packToGram,
+        storageEntry,
+        shouldPacks,
+        madePacks,
+        madeGrams,
+        leftoverGrams,
+        leftoverPacks,
+        status,
+        useLabel,
+      };
+    });
+  }, [orders, flavorMap, storageMap, purposeLabelByCode, orderCardById]);
 
   return (
-    <Card className="border rounded-xl">
-      <CardContent className="pt-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="font-medium">
-            {order.lotId}{" "}
-            <Badge variant="secondary" className="ml-2">
-              {order.factoryCode}
-            </Badge>
+    <div className="space-y-3">
+      <div className="overflow-auto rounded-xl border border-slate-200 bg-white">
+        <table className="w-full min-w-[1280px] text-sm">
+          <thead className="sticky top-0 bg-amber-50 text-slate-700">
+            <tr>
+              <th className="px-4 py-3 text-left font-semibold">製造指示日</th>
+              <th className="px-4 py-3 text-left font-semibold">製造日</th>
+              <th className="px-4 py-3 text-left font-semibold">味付け</th>
+              <th className="px-4 py-3 text-left font-semibold">用途</th>
+              <th className="px-4 py-3 text-left font-semibold">ステータス</th>
+              <th className="px-4 py-3 text-left font-semibold">操作</th>
+              <th className="px-4 py-3 text-left font-semibold text-right">製造すべき</th>
+              <th className="px-4 py-3 text-left font-semibold text-right">製造した</th>
+              <th className="px-4 py-3 text-left font-semibold text-right">余り</th>
+              <th className="px-4 py-3 text-left font-semibold">保管場所</th>
+            </tr>
+          </thead>
+          <tbody className="[&>tr:nth-child(even)]:bg-orange-50/40">
+            {rows.map(item => (
+              <FloorTableDataRow
+                key={item.row.order_id}
+                data={item}
+                findFlavor={findFlavor}
+                storageByFactory={storageByFactory}
+                mastersLoading={mastersLoading}
+                keepBusy={keepBusy}
+                reportBusy={reportBusy}
+                onKeep={onKeep}
+                onReportMade={onReportMade}
+              />
+            ))}
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={10} className="px-3 py-10 text-center text-slate-400">
+                  表示できるデータがありません
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div className="text-xs text-slate-400">行数: {rows.length}</div>
+    </div>
+  );
+}
+
+function FloorTableDataRow({
+  data,
+  findFlavor,
+  storageByFactory,
+  mastersLoading,
+  keepBusy,
+  reportBusy,
+  onKeep,
+  onReportMade,
+}: {
+  data: {
+    row: OrderRow;
+    card?: OrderCard;
+    storageEntry?: StorageAggRow;
+    flavorName: string;
+    packToGram: number;
+    shouldPacks?: number;
+    madePacks: number;
+    madeGrams?: number;
+    leftoverGrams?: number;
+    leftoverPacks?: number;
+    status: StatusType;
+    useLabel: string;
+  };
+  findFlavor: (flavorId: string) => FlavorWithRecipe | undefined;
+  storageByFactory: Record<string, string[]>;
+  mastersLoading: boolean;
+  keepBusy: boolean;
+  reportBusy: boolean;
+  onKeep: (order: OrderCard, values: KeepFormValues) => Promise<void>;
+  onReportMade: (order: OrderCard, report: MadeReport) => Promise<void>;
+}) {
+  const { row, card, storageEntry, flavorName, packToGram, shouldPacks, madePacks, madeGrams, leftoverGrams, leftoverPacks, status, useLabel } = data;
+  const [open, setOpen] = useState<null | "keep" | "made" | "skip" | "choice" | "split">(null);
+  const line = card?.lines?.[0];
+  const remainingPacks = line ? Math.max(0, line.packsRemaining ?? line.packs ?? 0) : 0;
+  const canSplit = line ? line.useType === "fissule" && (line.packs ?? 0) > 0 : false;
+  const packsLabel = shouldPacks !== undefined ? `${formatPacks(shouldPacks)}パック分` : "OEM";
+  const madePacksLabel = shouldPacks !== undefined ? `${formatPacks(madePacks)}パック分` : "-";
+  const leftoverPacksLabel = leftoverPacks !== undefined ? `${formatPacks(leftoverPacks)}パック分` : undefined;
+  const hasCard = Boolean(card);
+
+  const handleKeepSubmit = async (values: KeepFormValues) => {
+    if (card) {
+      await onKeep(card, values);
+    }
+  };
+
+  const handleReport = async (report: MadeReport) => {
+    if (card) {
+      await onReportMade(card, report);
+    }
+  };
+
+  const reset = () => setOpen(null);
+
+  return (
+    <>
+      <tr className={`align-top ${status === "全量使用" ? "opacity-70" : ""}`}>
+        <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">{row.ordered_at}</td>
+        <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">{storageEntry?.manufactured_at || "-"}</td>
+        <td className="px-4 py-3 text-sm text-slate-700">
+          <div className="font-semibold">{flavorName}</div>
+          <div className="text-xs text-muted-foreground">{row.lot_id}</div>
+        </td>
+        <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">{useLabel}</td>
+        <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">
+          <StatusPill status={status} />
+        </td>
+        <td className="px-4 py-3 text-sm text-slate-700">
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={() => setOpen("keep")} disabled={!hasCard}>
+              保管
+            </Button>
+            <Button size="sm" onClick={() => setOpen("choice")} disabled={!hasCard}>
+              作った
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => setOpen("skip")} disabled={!hasCard}>
+              作らない
+            </Button>
           </div>
-          <div className="text-xs opacity-70">指示日 {order.orderedAt}</div>
-        </div>
-        <div className="text-sm grid gap-3">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Field label="味付け">{flavor.flavorName}</Field>
-            <Field label="用途">
-              {(() => {
-                const label = line.useCode ? purposeLabelByCode[line.useCode] ?? line.useCode : "-";
-                return label;
-              })()}
-            </Field>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Field label={line.useType === "fissule" ? "残りパック数" : "OEM先"}>
-              {line.useType === "fissule"
-                ? formatPacks(remainingPacks)
-                : line.oemPartner ?? "-"}
-            </Field>
-            <Field label="必要量">
-              <span className="font-semibold">{formatGram(line.requiredGrams ?? 0)}</span>
-            </Field>
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={() => setOpen("keep")}>保管</Button>
-          <Button onClick={() => setOpen("choice")}>作った</Button>
-          <Button variant="secondary" onClick={() => setOpen("skip")}>作らない</Button>
-        </div>
-      </CardContent>
+        </td>
+        <td className="px-4 py-3 text-sm text-slate-700 text-right">
+          <QtyCell grams={row.required_grams} packsLabel={packsLabel} />
+        </td>
+        <td className="px-4 py-3 text-sm text-slate-700 text-right">
+          <QtyCell grams={madeGrams ?? (packToGram > 0 ? madePacks * packToGram : undefined)} packsLabel={madePacksLabel} />
+        </td>
+        <td className="px-4 py-3 text-sm text-slate-700 text-right">
+          <QtyCell grams={leftoverGrams} packsLabel={leftoverPacksLabel} />
+        </td>
+        <td className="px-4 py-3 text-sm text-slate-700" title={(storageEntry?.locations || []).join(" / ")}> 
+          {storageEntry?.locations?.length ? storageEntry.locations.join(" / ") : "-"}
+        </td>
+      </tr>
       <KeepDialog
         open={open === "keep"}
         onClose={reset}
-        factoryCode={order.factoryCode}
+        factoryCode={card?.factoryCode ?? row.factory_code}
         storageByFactory={storageByFactory}
-        onSubmit={onKeep}
+        onSubmit={handleKeepSubmit}
         mastersLoading={mastersLoading}
         busy={keepBusy}
       />
@@ -1266,10 +1440,10 @@ function OrderCardView({
         open={open === "made"}
         mode="bulk"
         onClose={reset}
-        order={order}
+        order={card ?? defaultOrderFromRow(row)}
         remaining={remainingPacks}
-        onReport={onReportMade}
-        findFlavor={findFlavor}
+        onReport={handleReport}
+        findFlavor={id => findFlavor(id) ?? defaultFlavor}
         storageByFactory={storageByFactory}
         mastersLoading={mastersLoading}
         busy={reportBusy}
@@ -1285,10 +1459,10 @@ function OrderCardView({
         open={open === "split"}
         mode="split"
         onClose={reset}
-        order={order}
+        order={card ?? defaultOrderFromRow(row)}
         remaining={remainingPacks}
-        onReport={onReportMade}
-        findFlavor={findFlavor}
+        onReport={handleReport}
+        findFlavor={id => findFlavor(id) ?? defaultFlavor}
         storageByFactory={storageByFactory}
         mastersLoading={mastersLoading}
         busy={reportBusy}
@@ -1300,9 +1474,44 @@ function OrderCardView({
           </DialogHeader>
         </DialogContent>
       </Dialog>
-    </Card>
+    </>
   );
 }
+
+function defaultOrderFromRow(row: OrderRow): OrderCard {
+  return {
+    orderId: row.order_id,
+    lotId: row.lot_id,
+    factoryCode: row.factory_code,
+    orderedAt: row.ordered_at,
+    archived: !!row.archived,
+    lines: [
+      {
+        flavorId: row.flavor_id,
+        packs: Number.isFinite(row.packs) ? Number(row.packs) : 0,
+        packsRemaining: Number.isFinite(row.packs_remaining) ? Number(row.packs_remaining) : Number(row.packs) || 0,
+        requiredGrams: row.required_grams,
+        useType: (row.use_type ?? "").toLowerCase() === "oem" ? "oem" : "fissule",
+        useCode: row.use_code ?? undefined,
+      },
+    ],
+  };
+}
+
+const Empty = ({ children }: { children: React.ReactNode }) => (
+  <div className="text-sm text-muted-foreground border rounded-xl p-6 text-center">{children}</div>
+);
+
+const Field = ({ label, children }: { label: string; children: React.ReactNode }) => (
+  <div className="space-y-1 min-w-[120px]">
+    <div className="inline-flex items-center rounded-md bg-slate-800 text-white px-2 py-0.5 text-[11px] tracking-wide">
+      {label}
+    </div>
+    <div className="text-sm font-medium leading-tight">{children}</div>
+  </div>
+);
+
+/* ===== 各種ダイアログ/カード ===== */
 
 function MadeChoiceDialog({
   open,
@@ -1525,7 +1734,7 @@ function MadeDialog2({
         ? { location: leftLoc, grams: leftGrams }
         : null;
 
-    // checked かつ >0 の行のみ採用。null は返さず型ガードで MaterialLine[] に。
+    // checked かつ >0 の行のみ採用。SWC での型述語パースを避けるため最後に as で絞り込む。
     const materials: MaterialLine[] = flavor.recipe
       .map((r): MaterialLine | null => {
         const key = r.ingredient;
@@ -1540,9 +1749,9 @@ function MadeDialog2({
           unit: "g",
           store_location: "",
           source: "entered",
-        };
+        } as MaterialLine;
       })
-      .filter((m): m is MaterialLine => m !== null);
+      .filter(m => m !== null) as MaterialLine[];
 
     try {
       await onReport({
