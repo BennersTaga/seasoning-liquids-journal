@@ -1256,20 +1256,19 @@ function FloorTable({
                   />
 
                   {storageEntriesForOrder.map((entry, index) => (
-                  <FloorChildRow
-                    key={`${order.orderId}-${entry.lotId}-${index}`}
-                    parentOrder={order}
-                    storageEntry={entry}
-                    childIndex={index + 1}
-                    storageByFactory={storageByFactory}
-                    findFlavor={findFlavor}
-                    purposeLabelByCode={purposeLabelByCode}
-                    onUseOrWasteCompleted={() => {}}
-                  />
-                ))}
-              </React.Fragment>
-            );
-          })}
+                    <FloorChildRow
+                      key={`${order.orderId}-${entry.lotId}-${index}`}
+                      parentOrder={order}
+                      storageEntry={entry}
+                      childIndex={index + 1}
+                      storageByFactory={storageByFactory}
+                      findFlavor={findFlavor}
+                      purposeLabelByCode={purposeLabelByCode}
+                    />
+                  ))}
+                </React.Fragment>
+              );
+            })}
             {activeOrders.length === 0 && (
               <tr>
                 <td colSpan={10} className="px-3 py-10 text-center text-slate-400">
@@ -1459,7 +1458,6 @@ function FloorChildRow({
   storageByFactory,
   findFlavor,
   purposeLabelByCode,
-  onUseOrWasteCompleted,
 }: {
   parentOrder: OrderCard;
   storageEntry: StorageAggEntry;
@@ -1467,7 +1465,6 @@ function FloorChildRow({
   storageByFactory: Record<string, string[]>;
   findFlavor: (id: string) => FlavorWithRecipe | undefined;
   purposeLabelByCode: Record<string, string>;
-  onUseOrWasteCompleted: () => void;
 }) {
   const [useOpen, setUseOpen] = useState(false);
   const [wasteOpen, setWasteOpen] = useState(false);
@@ -1542,7 +1539,6 @@ function FloorChildRow({
       ]);
       useRequestIdRef.current = null;
       setUseOpen(false);
-      onUseOrWasteCompleted();
     } catch (error) {
       console.error(error);
     } finally {
@@ -1580,7 +1576,6 @@ function FloorChildRow({
       ]);
       wasteRequestIdRef.current = null;
       setWasteOpen(false);
-      onUseOrWasteCompleted();
     } catch (error) {
       console.error(error);
     } finally {
