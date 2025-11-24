@@ -1375,7 +1375,7 @@ function FloorTableRow({
         <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">
           <div className="flex flex-wrap gap-1">
             <StatusPill status={status} />
-            {hasLeftover && status !== "全量使用" && (
+            {hasLeftover && status !== "保管中" && status !== "全量使用" && (
               <StatusPill status="保管中" />
             )}
           </div>
@@ -1610,7 +1610,7 @@ function FloorChildRow({
       <td className="px-4 py-3 text-sm text-slate-700">
         <div className="flex flex-wrap gap-2">
           <Button size="sm" onClick={() => setUseOpen(true)}>使う</Button>
-          <Button size="sm" variant="secondary" onClick={() => setWasteOpen(true)}>廃棄</Button>
+          <Button size="sm" variant="destructive" onClick={() => setWasteOpen(true)}>廃棄</Button>
         </div>
       </td>
       <td className="px-4 py-3 text-sm text-slate-700 text-right">-</td>
