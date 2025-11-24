@@ -44,6 +44,7 @@ interface OrderLine {
   flavorId: string;
   packs: number;
   packsRemaining?: number;
+  madePacks?: number;
   requiredGrams: number;
   useType: "fissule" | "oem";
   useCode?: string;
@@ -80,16 +81,6 @@ type MadeReport = {
 };
 
 type KeepFormValues = { location: string; grams: number; manufacturedAt: string };
-
-const EMPTY_MASTERS: Masters = {
-  factories: [],
-  locations: [],
-  uses: [],
-  use_flavors: [],
-  flavors: [],
-  recipes: [],
-  oem_partners: [],
-};
 
 const defaultFlavor: FlavorWithRecipe = {
   id: "",
@@ -180,11 +171,13 @@ function normalizeOrders(rows?: OrderRow[]): OrderCard[] {
     const packsNum = Number(row.packs);
     const packsRemainingNum = Number(row.packs_remaining);
     const requiredGramsNum = Number(row.required_grams);
+    const madePacksNum = Number(row.made_packs);
 
     const line: OrderLine = isOem
       ? {
           flavorId: row.flavor_id,
           packs: 0,
+          madePacks: Number.isFinite(madePacksNum) ? madePacksNum : 0,
           requiredGrams: Number.isFinite(requiredGramsNum) ? requiredGramsNum : 0,
           useType: "oem",
           useCode: row.use_code ?? undefined,
@@ -199,6 +192,7 @@ function normalizeOrders(rows?: OrderRow[]): OrderCard[] {
             : Number.isFinite(packsNum)
               ? packsNum
               : 0,
+          madePacks: Number.isFinite(madePacksNum) ? madePacksNum : 0,
           requiredGrams: Number.isFinite(requiredGramsNum) ? requiredGramsNum : 0,
           useType: "fissule",
           useCode: row.use_code ?? undefined,
@@ -390,7 +384,6 @@ export default function App() {
         </TabsContent>
         <TabsContent value="floor" className="mt-6">
           <Floor
-            masters={mastersData ?? EMPTY_MASTERS}
             factories={factories}
             flavors={flavors}
             findFlavor={findFlavor}
@@ -821,7 +814,6 @@ function Office({
 /* ===== Floor タブ ===== */
 
 function Floor({
-  masters,
   factories,
   flavors,
   findFlavor,
@@ -834,7 +826,6 @@ function Floor({
   onRequestError,
   onRequestSuccess,
 }: {
-  masters: Masters;
   factories: { code: string; name: string }[];
   flavors: FlavorWithRecipe[];
   findFlavor: (id: string) => FlavorWithRecipe;
@@ -881,7 +872,15 @@ function Floor({
   const ordersQuery = useOrders(factory || undefined, false);
   const storageAggQuery = useStorageAgg(factory || undefined);
 
-  const orders = useMemo(() => normalizeOrders(ordersQuery.data), [ordersQuery.data]);
+  const orders = useMemo(
+    () => normalizeOrders(ordersQuery.data),
+    [ordersQuery.data],
+  );
+
+  const storageAgg = useMemo(
+    () => normalizeStorage(storageAggQuery.data),
+    [storageAggQuery.data],
+  );
 
   useEffect(() => {
     const next = { ...seqRef.current };
@@ -1047,14 +1046,6 @@ function Floor({
     [madeBusy, onRequestError, onRequestSuccess],
   );
 
-  const orderCardById = useMemo(() => {
-    const map = new Map<string, OrderCard>();
-    orders.forEach(order => {
-      map.set(order.orderId, order);
-    });
-    return map;
-  }, [orders]);
-
   return (
     <div className="min-h-screen bg-[#FFF4EA] p-6">
       <div className="mx-auto max-w-[1280px] space-y-3">
@@ -1091,16 +1082,14 @@ function Floor({
         </div>
 
         <FloorTable
-          masters={masters}
-          orders={ordersQuery.data ?? []}
-          storageAgg={storageAggQuery.data ?? []}
+          orders={orders}
+          storageAgg={storageAgg}
           purposeLabelByCode={purposeLabelByCode}
           findFlavor={findFlavor}
           storageByFactory={storageByFactory}
           mastersLoading={mastersLoading}
           keepBusy={keepBusy}
           reportBusy={madeBusy}
-          orderCardById={orderCardById}
           onKeep={(order, values) => handleKeep(order, values)}
           onReportMade={(order, report) => handleReportMade(order, report)}
         />
@@ -1156,16 +1145,14 @@ function KanbanColumn({
 }
 
 type FloorTableProps = {
-  masters: Masters;
-  orders: OrderRow[];
-  storageAgg: StorageAggRow[];
+  orders: OrderCard[];
+  storageAgg: StorageAggEntry[];
   purposeLabelByCode: Record<string, string>;
   findFlavor: (flavorId: string) => FlavorWithRecipe | undefined;
   storageByFactory: Record<string, string[]>;
   mastersLoading: boolean;
   keepBusy: boolean;
   reportBusy: boolean;
-  orderCardById: Map<string, OrderCard>;
   onKeep: (order: OrderCard, values: KeepFormValues) => Promise<void>;
   onReportMade: (order: OrderCard, report: MadeReport) => Promise<void>;
 };
@@ -1199,7 +1186,6 @@ function QtyCell({ grams, packsLabel }: { grams?: number | null; packsLabel?: st
 }
 
 function FloorTable({
-  masters,
   orders,
   storageAgg,
   purposeLabelByCode,
@@ -1208,82 +1194,25 @@ function FloorTable({
   mastersLoading,
   keepBusy,
   reportBusy,
-  orderCardById,
   onKeep,
   onReportMade,
 }: FloorTableProps) {
-  const flavorMap = useMemo(() => {
-    const map = new Map<string, { name: string; packToGram: number }>();
-    masters.flavors?.forEach(f => {
-      map.set(f.flavor_id, { name: f.flavor_name, packToGram: f.pack_to_gram });
-    });
-    return map;
-  }, [masters]);
+  const storageByParent = useMemo(() => {
+    const map = new Map<string, StorageAggEntry[]>();
 
-  const storageMap = useMemo(() => {
-    const map = new Map<string, StorageAggRow>();
     storageAgg.forEach(entry => {
-      map.set(`${entry.lot_id}-${entry.flavor_id}`, entry);
+      const match = entry.lotId.match(/^([A-Z0-9]+-\d{8}-\d{3})(?:-(\d+))?$/);
+      const parentLotId = match ? match[1] : entry.lotId;
+      const key = `${parentLotId}-${entry.flavorId}`;
+      const arr = map.get(key) ?? [];
+      arr.push(entry);
+      map.set(key, arr);
     });
+
     return map;
   }, [storageAgg]);
 
-  const rows = useMemo(() => {
-    return (orders ?? []).filter(o => !o.archived).map(row => {
-      const flavor = flavorMap.get(row.flavor_id);
-      const packToGram = flavor?.packToGram ?? 0;
-      const storageEntry = storageMap.get(`${row.lot_id}-${row.flavor_id}`);
-      const shouldPacks =
-        (row.use_type ?? "").toLowerCase() === "oem"
-          ? undefined
-          : Number.isFinite(row.packs)
-            ? Number(row.packs)
-            : undefined;
-      const madePacks = Number.isFinite(row.made_packs as number)
-        ? Number(row.made_packs)
-        : Number.isFinite(row.packs as number) && Number.isFinite(row.packs_remaining as number)
-          ? Math.max(0, (row.packs as number) - (row.packs_remaining as number))
-          : 0;
-      const leftoverGrams = storageEntry?.grams ?? 0;
-      const status: StatusType = (() => {
-        if (leftoverGrams > 0) return "保管中";
-        if (shouldPacks !== undefined && madePacks >= shouldPacks && row.archived) return "全量使用";
-        if (shouldPacks !== undefined && madePacks >= shouldPacks) return "製造完了";
-        if (madePacks > 0 && (shouldPacks === undefined || madePacks < shouldPacks)) return "製造中";
-        return "指示";
-      })();
-
-      const useLabel = row.use_code
-        ? purposeLabelByCode[row.use_code] ?? row.use_code
-        : (row.use_type ?? "").toLowerCase() === "oem"
-          ? "OEM"
-          : "製品";
-
-      const madeGrams = packToGram > 0 && madePacks > 0 ? madePacks * packToGram : undefined;
-      const hasPacksEquiv =
-        typeof storageEntry?.packs_equiv === "number" && Number.isFinite(storageEntry.packs_equiv);
-      const leftoverPacks = hasPacksEquiv
-        ? (storageEntry?.packs_equiv as number)
-        : packToGram > 0 && leftoverGrams > 0
-          ? leftoverGrams / packToGram
-          : undefined;
-
-      return {
-        row,
-        card: orderCardById.get(row.order_id),
-        flavorName: flavor?.name ?? row.flavor_id,
-        packToGram,
-        storageEntry,
-        shouldPacks,
-        madePacks,
-        madeGrams,
-        leftoverGrams,
-        leftoverPacks,
-        status,
-        useLabel,
-      };
-    });
-  }, [orders, flavorMap, storageMap, purposeLabelByCode, orderCardById]);
+  const activeOrders = useMemo(() => orders.filter(o => !o.archived), [orders]);
 
   return (
     <div className="space-y-3">
@@ -1304,20 +1233,43 @@ function FloorTable({
             </tr>
           </thead>
           <tbody className="[&>tr:nth-child(even)]:bg-orange-50/40">
-            {rows.map(item => (
-              <FloorTableDataRow
-                key={item.row.order_id}
-                data={item}
-                findFlavor={findFlavor}
-                storageByFactory={storageByFactory}
-                mastersLoading={mastersLoading}
-                keepBusy={keepBusy}
-                reportBusy={reportBusy}
-                onKeep={onKeep}
-                onReportMade={onReportMade}
-              />
-            ))}
-            {rows.length === 0 && (
+            {activeOrders.map(order => {
+              const line = order.lines[0];
+              const key = `${order.lotId}-${line.flavorId}`;
+              const storageEntriesForOrder = storageByParent.get(key) ?? [];
+              const mainStorageEntry = storageEntriesForOrder[0];
+
+              return (
+                <React.Fragment key={order.orderId}>
+                  <FloorTableRow
+                    order={order}
+                    storageEntry={mainStorageEntry}
+                    storageEntries={storageEntriesForOrder}
+                    purposeLabelByCode={purposeLabelByCode}
+                    findFlavor={findFlavor}
+                    storageByFactory={storageByFactory}
+                    mastersLoading={mastersLoading}
+                    keepBusy={keepBusy}
+                    reportBusy={reportBusy}
+                    onKeep={onKeep}
+                    onReportMade={onReportMade}
+                  />
+
+                  {storageEntriesForOrder.map((entry, index) => (
+                    <FloorChildRow
+                      key={`${order.orderId}-${entry.lotId}-${index}`}
+                      parentOrder={order}
+                      storageEntry={entry}
+                      childIndex={index + 1}
+                      storageByFactory={storageByFactory}
+                      findFlavor={findFlavor}
+                      purposeLabelByCode={purposeLabelByCode}
+                    />
+                  ))}
+                </React.Fragment>
+              );
+            })}
+            {activeOrders.length === 0 && (
               <tr>
                 <td colSpan={10} className="px-3 py-10 text-center text-slate-400">
                   表示できるデータがありません
@@ -1327,13 +1279,16 @@ function FloorTable({
           </tbody>
         </table>
       </div>
-      <div className="text-xs text-slate-400">行数: {rows.length}</div>
+      <div className="text-xs text-slate-400">行数: {activeOrders.length}</div>
     </div>
   );
 }
 
-function FloorTableDataRow({
-  data,
+function FloorTableRow({
+  order,
+  storageEntry,
+  storageEntries,
+  purposeLabelByCode,
   findFlavor,
   storageByFactory,
   mastersLoading,
@@ -1342,20 +1297,10 @@ function FloorTableDataRow({
   onKeep,
   onReportMade,
 }: {
-  data: {
-    row: OrderRow;
-    card?: OrderCard;
-    storageEntry?: StorageAggRow;
-    flavorName: string;
-    packToGram: number;
-    shouldPacks?: number;
-    madePacks: number;
-    madeGrams?: number;
-    leftoverGrams?: number;
-    leftoverPacks?: number;
-    status: StatusType;
-    useLabel: string;
-  };
+  order: OrderCard;
+  storageEntry?: StorageAggEntry;
+  storageEntries?: StorageAggEntry[];
+  purposeLabelByCode: Record<string, string>;
   findFlavor: (flavorId: string) => FlavorWithRecipe | undefined;
   storageByFactory: Record<string, string[]>;
   mastersLoading: boolean;
@@ -1364,26 +1309,55 @@ function FloorTableDataRow({
   onKeep: (order: OrderCard, values: KeepFormValues) => Promise<void>;
   onReportMade: (order: OrderCard, report: MadeReport) => Promise<void>;
 }) {
-  const { row, card, storageEntry, flavorName, packToGram, shouldPacks, madePacks, madeGrams, leftoverGrams, leftoverPacks, status, useLabel } = data;
   const [open, setOpen] = useState<null | "keep" | "made" | "skip" | "choice" | "split">(null);
-  const line = card?.lines?.[0];
-  const remainingPacks = line ? Math.max(0, line.packsRemaining ?? line.packs ?? 0) : 0;
-  const canSplit = line ? line.useType === "fissule" && (line.packs ?? 0) > 0 : false;
+  const line = order.lines[0];
+  const flavor = findFlavor(line.flavorId) ?? { ...defaultFlavor, id: line.flavorId };
+  const flavorName = flavor.flavorName || line.flavorId;
+  const packToGram = flavor.packToGram ?? 0;
+  const shouldPacks = line.useType === "oem" ? undefined : line.packs;
+  const madePacks = Number.isFinite(line.madePacks as number) ? line.madePacks ?? 0 : 0;
+  const totalLeftoverGrams = (storageEntries ?? []).reduce((sum, e) => sum + (e.grams ?? 0), 0);
+  const totalPacksEquiv = (storageEntries ?? []).reduce((sum, e) => sum + (e.packsEquiv ?? 0), 0);
+  const leftoverPacks =
+    totalPacksEquiv > 0
+      ? totalPacksEquiv
+      : packToGram > 0 && totalLeftoverGrams > 0
+        ? totalLeftoverGrams / packToGram
+        : undefined;
+  const status: StatusType = (() => {
+    if (totalLeftoverGrams > 0) return "保管中";
+    if (shouldPacks !== undefined && madePacks >= (shouldPacks ?? 0) && order.archived) return "全量使用";
+    if (shouldPacks !== undefined && madePacks >= (shouldPacks ?? 0)) return "製造完了";
+    if (madePacks > 0 && (shouldPacks === undefined || madePacks < (shouldPacks ?? 0))) return "製造中";
+    return "指示";
+  })();
+
+  const useLabel = line.useCode
+    ? purposeLabelByCode[line.useCode] ?? line.useCode
+    : line.useType === "oem"
+      ? "OEM"
+      : "製品";
+
+  const madeGrams = packToGram > 0 && madePacks > 0 ? madePacks * packToGram : undefined;
+  const remainingPacks = Math.max(0, line.packsRemaining ?? line.packs ?? 0);
   const packsLabel = shouldPacks !== undefined ? `${formatPacks(shouldPacks)}パック分` : "OEM";
   const madePacksLabel = shouldPacks !== undefined ? `${formatPacks(madePacks)}パック分` : "-";
   const leftoverPacksLabel = leftoverPacks !== undefined ? `${formatPacks(leftoverPacks)}パック分` : undefined;
-  const hasCard = Boolean(card);
+
+  const locationsSet = new Set<string>();
+  (storageEntries ?? []).forEach(e => {
+    (e.locations ?? []).forEach(loc => locationsSet.add(loc));
+  });
+  const locationsText = Array.from(locationsSet).join(" / ") || "-";
+  const hasLeftover = totalLeftoverGrams > 0;
+  const canSplit = line ? line.useType === "fissule" && (line.packs ?? 0) > 0 : false;
 
   const handleKeepSubmit = async (values: KeepFormValues) => {
-    if (card) {
-      await onKeep(card, values);
-    }
+    await onKeep(order, values);
   };
 
   const handleReport = async (report: MadeReport) => {
-    if (card) {
-      await onReportMade(card, report);
-    }
+    await onReportMade(order, report);
   };
 
   const reset = () => setOpen(null);
@@ -1391,46 +1365,45 @@ function FloorTableDataRow({
   return (
     <>
       <tr className={`align-top ${status === "全量使用" ? "opacity-70" : ""}`}>
-        <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">{row.ordered_at}</td>
-        <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">{storageEntry?.manufactured_at || "-"}</td>
+        <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">{order.orderedAt}</td>
+        <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">{storageEntry?.manufacturedAt || "-"}</td>
         <td className="px-4 py-3 text-sm text-slate-700">
           <div className="font-semibold">{flavorName}</div>
-          <div className="text-xs text-muted-foreground">{row.lot_id}</div>
+          <div className="text-xs text-muted-foreground">{order.lotId}</div>
         </td>
         <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">{useLabel}</td>
         <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">
-          <StatusPill status={status} />
+          <div className="flex flex-wrap gap-1">
+            <StatusPill status={status} />
+            {hasLeftover && status !== "全量使用" && (
+              <StatusPill status="保管中" />
+            )}
+          </div>
         </td>
         <td className="px-4 py-3 text-sm text-slate-700">
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" size="sm" onClick={() => setOpen("keep")} disabled={!hasCard}>
-              保管
-            </Button>
-            <Button size="sm" onClick={() => setOpen("choice")} disabled={!hasCard}>
-              作った
-            </Button>
-            <Button variant="secondary" size="sm" onClick={() => setOpen("skip")} disabled={!hasCard}>
-              作らない
-            </Button>
+            <Button variant="outline" size="sm" onClick={() => setOpen("keep")}>保管</Button>
+            <Button size="sm" onClick={() => setOpen("choice")}>作った</Button>
+            <Button variant="secondary" size="sm" onClick={() => setOpen("skip")}>作らない</Button>
           </div>
         </td>
         <td className="px-4 py-3 text-sm text-slate-700 text-right">
-          <QtyCell grams={row.required_grams} packsLabel={packsLabel} />
+          <QtyCell grams={line.requiredGrams} packsLabel={packsLabel} />
         </td>
         <td className="px-4 py-3 text-sm text-slate-700 text-right">
-          <QtyCell grams={madeGrams ?? (packToGram > 0 ? madePacks * packToGram : undefined)} packsLabel={madePacksLabel} />
+          <QtyCell grams={madeGrams} packsLabel={madePacksLabel} />
         </td>
         <td className="px-4 py-3 text-sm text-slate-700 text-right">
-          <QtyCell grams={leftoverGrams} packsLabel={leftoverPacksLabel} />
+          <QtyCell grams={totalLeftoverGrams} packsLabel={leftoverPacksLabel} />
         </td>
-        <td className="px-4 py-3 text-sm text-slate-700" title={(storageEntry?.locations || []).join(" / ")}> 
-          {storageEntry?.locations?.length ? storageEntry.locations.join(" / ") : "-"}
+        <td className="px-4 py-3 text-sm text-slate-700" title={locationsText}>
+          {locationsText}
         </td>
       </tr>
       <KeepDialog
         open={open === "keep"}
         onClose={reset}
-        factoryCode={card?.factoryCode ?? row.factory_code}
+        factoryCode={order.factoryCode}
         storageByFactory={storageByFactory}
         onSubmit={handleKeepSubmit}
         mastersLoading={mastersLoading}
@@ -1440,7 +1413,7 @@ function FloorTableDataRow({
         open={open === "made"}
         mode="bulk"
         onClose={reset}
-        order={card ?? defaultOrderFromRow(row)}
+        order={order}
         remaining={remainingPacks}
         onReport={handleReport}
         findFlavor={id => findFlavor(id) ?? defaultFlavor}
@@ -1459,7 +1432,7 @@ function FloorTableDataRow({
         open={open === "split"}
         mode="split"
         onClose={reset}
-        order={card ?? defaultOrderFromRow(row)}
+        order={order}
         remaining={remainingPacks}
         onReport={handleReport}
         findFlavor={id => findFlavor(id) ?? defaultFlavor}
@@ -1478,24 +1451,338 @@ function FloorTableDataRow({
   );
 }
 
-function defaultOrderFromRow(row: OrderRow): OrderCard {
-  return {
-    orderId: row.order_id,
-    lotId: row.lot_id,
-    factoryCode: row.factory_code,
-    orderedAt: row.ordered_at,
-    archived: !!row.archived,
-    lines: [
-      {
-        flavorId: row.flavor_id,
-        packs: Number.isFinite(row.packs) ? Number(row.packs) : 0,
-        packsRemaining: Number.isFinite(row.packs_remaining) ? Number(row.packs_remaining) : Number(row.packs) || 0,
-        requiredGrams: row.required_grams,
-        useType: (row.use_type ?? "").toLowerCase() === "oem" ? "oem" : "fissule",
-        useCode: row.use_code ?? undefined,
-      },
-    ],
+function FloorChildRow({
+  parentOrder,
+  storageEntry,
+  childIndex,
+  storageByFactory,
+  findFlavor,
+  purposeLabelByCode,
+}: {
+  parentOrder: OrderCard;
+  storageEntry: StorageAggEntry;
+  childIndex: number;
+  storageByFactory: Record<string, string[]>;
+  findFlavor: (id: string) => FlavorWithRecipe | undefined;
+  purposeLabelByCode: Record<string, string>;
+}) {
+  const [useOpen, setUseOpen] = useState(false);
+  const [wasteOpen, setWasteOpen] = useState(false);
+  const [useQty, setUseQty] = useState(0);
+  const [useOutcome, setUseOutcome] = useState<"extra" | "none" | "shortage" | "">("");
+  const [leftQty, setLeftQty] = useState(0);
+  const [loc, setLoc] = useState<string>(storageEntry.locations[0] || "");
+  const [wasteReason, setWasteReason] = useState<"expiry" | "mistake" | "other" | "">("");
+  const [wasteQty, setWasteQty] = useState(0);
+  const [wasteText, setWasteText] = useState("");
+  const useRequestIdRef = useRef<string | null>(null);
+  const wasteRequestIdRef = useRef<string | null>(null);
+  const [useBusy, setUseBusy] = useState(false);
+  const [wasteBusy, setWasteBusy] = useState(false);
+
+  useEffect(() => {
+    if (useOpen) {
+      setUseQty(0);
+      setUseOutcome("");
+      setLeftQty(0);
+      setLoc(storageEntry.locations[0] || "");
+    }
+  }, [useOpen, storageEntry.locations]);
+
+  useEffect(() => {
+    if (wasteOpen) {
+      setWasteReason("");
+      setWasteQty(0);
+      setWasteText("");
+      setLoc(storageEntry.locations[0] || "");
+    }
+  }, [wasteOpen, storageEntry.locations]);
+
+  const flavor = findFlavor(storageEntry.flavorId) ?? { ...defaultFlavor, id: storageEntry.flavorId };
+  const line = parentOrder.lines[0];
+  const useLabel = line.useCode
+    ? purposeLabelByCode[line.useCode] ?? line.useCode
+    : line.useType === "oem"
+      ? "OEM"
+      : "製品";
+
+  const effectiveLocation = (current: string) => current || storageEntry.locations[0] || "";
+
+  const handleUse = async () => {
+    if (useBusy) return;
+    const location = effectiveLocation(loc);
+    if (!location || useQty <= 0) return;
+    if (!useRequestIdRef.current) {
+      useRequestIdRef.current = genId();
+    }
+    const requestId = useRequestIdRef.current as string;
+    try {
+      setUseBusy(true);
+      await apiPost("action", {
+        type: "USE",
+        factory_code: parentOrder.factoryCode,
+        lot_id: storageEntry.lotId,
+        flavor_id: storageEntry.flavorId,
+        payload: {
+          grams: useQty,
+          location,
+          result: useOutcome || "used",
+          leftover:
+            useOutcome === "extra" && leftQty > 0
+              ? { grams: leftQty, location }
+              : null,
+        },
+      }, { requestId });
+      await Promise.all([
+        mutate(["storage-agg", parentOrder.factoryCode]),
+        mutate(["orders", parentOrder.factoryCode, false]),
+      ]);
+      useRequestIdRef.current = null;
+      setUseOpen(false);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setUseBusy(false);
+    }
   };
+
+  const handleWaste = async () => {
+    if (wasteBusy) return;
+    const location = effectiveLocation(loc);
+    if (!location) return;
+    if (wasteReason === "" || wasteQty <= 0) return;
+    if (!wasteRequestIdRef.current) {
+      wasteRequestIdRef.current = genId();
+    }
+    const requestId = wasteRequestIdRef.current as string;
+    try {
+      setWasteBusy(true);
+      const payload =
+        wasteReason === "other"
+          ? { reason: "other", note: wasteText, grams: wasteQty, qty: wasteQty, location }
+          : { reason: wasteReason, grams: wasteQty, qty: wasteQty, location };
+
+      await apiPost("action", {
+        type: "WASTE",
+        factory_code: parentOrder.factoryCode,
+        lot_id: storageEntry.lotId,
+        flavor_id: storageEntry.flavorId,
+        payload,
+      }, { requestId });
+
+      await Promise.all([
+        mutate(["storage-agg", parentOrder.factoryCode]),
+        mutate(["orders", parentOrder.factoryCode, false]),
+      ]);
+      wasteRequestIdRef.current = null;
+      setWasteOpen(false);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setWasteBusy(false);
+    }
+  };
+
+  const locations = storageByFactory[parentOrder.factoryCode] || [];
+
+  return (
+    <tr className="align-top bg-orange-50/60">
+      <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">-</td>
+      <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">{storageEntry.manufacturedAt}</td>
+      <td className="px-4 py-3 text-sm text-slate-700">
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-300">└</span>
+            <span className="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] text-slate-600 bg-white">
+              子ロット #{childIndex}
+            </span>
+            <span className="text-sm text-slate-700">{flavor.flavorName}</span>
+          </div>
+          <div className="text-[11px] text-slate-500">
+            {storageEntry.lotId} / {storageEntry.manufacturedAt}
+          </div>
+        </div>
+      </td>
+      <td className="px-4 py-3 text-sm text-slate-500 whitespace-nowrap">{useLabel}</td>
+      <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">
+        <StatusPill status="保管中" />
+      </td>
+      <td className="px-4 py-3 text-sm text-slate-700">
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" onClick={() => setUseOpen(true)}>使う</Button>
+          <Button size="sm" variant="secondary" onClick={() => setWasteOpen(true)}>廃棄</Button>
+        </div>
+      </td>
+      <td className="px-4 py-3 text-sm text-slate-700 text-right">-</td>
+      <td className="px-4 py-3 text-sm text-slate-700 text-right">
+        <QtyCell grams={storageEntry.grams} packsLabel={storageEntry.packsEquiv ? `${formatPacks(storageEntry.packsEquiv)}パック分` : undefined} />
+      </td>
+      <td className="px-4 py-3 text-sm text-slate-700 text-right">
+        <QtyCell grams={storageEntry.grams} packsLabel={storageEntry.packsEquiv ? `${formatPacks(storageEntry.packsEquiv)}パック分` : undefined} />
+      </td>
+      <td className="px-4 py-3 text-sm text-slate-700">{storageEntry.locations.join(" / ")}</td>
+
+      <Dialog open={useOpen} onOpenChange={setUseOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>在庫の使用</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>使用量（g）</Label>
+                <Input
+                  type="number"
+                  value={useQty}
+                  onChange={e => setUseQty(Number.parseInt(e.target.value || "0", 10))}
+                />
+              </div>
+              <div>
+                <Label>結果</Label>
+                <Select value={useOutcome} onValueChange={(value: "extra" | "none" | "shortage") => setUseOutcome(value)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="選択" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="extra">余った</SelectItem>
+                    <SelectItem value="none">余らず</SelectItem>
+                    <SelectItem value="shortage">不足</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {useOutcome === "extra" && (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>余り数量（g）</Label>
+                  <Input
+                    type="number"
+                    value={leftQty}
+                    onChange={e => setLeftQty(Number.parseInt(e.target.value || "0", 10))}
+                  />
+                </div>
+                <div>
+                  <Label>保管場所</Label>
+                  <Select value={loc} onValueChange={setLoc}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {locations.map(l => (
+                        <SelectItem key={l} value={l}>
+                          {l}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            )}
+            {useOutcome !== "extra" && (
+              <div>
+                <Label>保管場所</Label>
+                <Select value={loc} onValueChange={setLoc}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {locations.map(l => (
+                      <SelectItem key={l} value={l}>
+                        {l}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setUseOpen(false)}>キャンセル</Button>
+            <Button
+              disabled={
+                useBusy ||
+                useQty <= 0 ||
+                (useOutcome === "extra" && (leftQty <= 0 || !effectiveLocation(loc))) ||
+                !effectiveLocation(loc)
+              }
+              onClick={handleUse}
+            >
+              登録
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={wasteOpen} onOpenChange={setWasteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>廃棄記録</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>廃棄理由</Label>
+                <Select value={wasteReason} onValueChange={(value: "expiry" | "mistake" | "other") => setWasteReason(value)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="選択" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="expiry">期限切れ</SelectItem>
+                    <SelectItem value="mistake">誤製造</SelectItem>
+                    <SelectItem value="other">その他</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>廃棄量（g）</Label>
+                <Input
+                  type="number"
+                  value={wasteQty}
+                  onChange={e => setWasteQty(Number.parseInt(e.target.value || "0", 10))}
+                />
+              </div>
+            </div>
+            <div>
+              <Label>保管場所</Label>
+              <Select value={loc} onValueChange={setLoc}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {locations.map(l => (
+                    <SelectItem key={l} value={l}>
+                      {l}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {wasteReason === "other" && (
+              <div>
+                <Label>詳細</Label>
+                <Input value={wasteText} onChange={e => setWasteText(e.target.value)} />
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setWasteOpen(false)}>キャンセル</Button>
+            <Button
+              disabled={
+                wasteBusy ||
+                wasteQty <= 0 ||
+                wasteReason === "" ||
+                !effectiveLocation(loc) ||
+                (wasteReason === "other" && wasteText.trim() === "")
+              }
+              onClick={handleWaste}
+            >
+              登録
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </tr>
+  );
 }
 
 const Empty = ({ children }: { children: React.ReactNode }) => (
