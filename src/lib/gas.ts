@@ -22,6 +22,23 @@ function createTimeoutController(timeoutMs: number) {
   return { controller, timeoutId };
 }
 
+export type MadeLogRow = {
+  action_id: string;
+  factory_code: string;
+  lot_id: string;
+  flavor_id: string;
+  flavor_name: string;
+  manufactured_at: string; // "yyyy-MM-dd"
+  produced_grams: number;
+  produced_packs: number;
+  leftover_grams: number | null;
+  status: "製造完了" | "全量使用";
+};
+
+export type MadeLogResponse = {
+  rows: MadeLogRow[];
+};
+
 export async function apiGet<T = unknown>(
   path: string,
   params?: Record<string, unknown>,
@@ -103,4 +120,13 @@ export async function apiPost<T = unknown>(
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+export async function fetchMadeLog(params: {
+  factory: string;
+  start: string;
+  end: string;
+}): Promise<MadeLogResponse> {
+  const { factory, start, end } = params;
+  return apiGet<MadeLogResponse>("made-log", { factory, start, end });
 }
