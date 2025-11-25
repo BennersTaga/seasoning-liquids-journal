@@ -11,10 +11,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Package, Warehouse, Archive, Beaker, Factory, Trash2, Boxes } from "lucide-react";
-import { format } from "date-fns";
-import { mutate } from "swr";
+import { endOfMonth, format, startOfMonth } from "date-fns";
+import useSWR, { mutate } from "swr";
 
-import { apiPost } from "@/lib/gas";
+import { apiPost, fetchMadeLog, type MadeLogRow } from "@/lib/gas";
 import { useMasters } from "@/hooks/useMasters";
 import { useOrders } from "@/hooks/useOrders";
 import { useStorageAgg } from "@/hooks/useStorageAgg";
@@ -103,6 +103,8 @@ const formatPacks = (n: number) => Math.round(Number.isFinite(n) ? n : 0).toLoca
 const genId = () => globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2);
 const genLotId = (factoryCode: string, seq: number, d = new Date()) =>
   `${factoryCode}-${format(d, "yyyyMMdd")}-${String(seq).padStart(3, "0")}`;
+const lotIdPattern = /^([A-Z0-9]+-\d{8}-\d{3})(?:-(\d+))?$/;
+const isChildLot = (lotId: string) => Boolean(lotId.match(lotIdPattern)?.[2]);
 
 function deriveDataFromMasters(masters?: Masters) {
   const factories =
@@ -858,6 +860,12 @@ function Floor({
   const [madeBusy, setMadeBusy] = useState(false);
   const madeRequestIdRef = useRef<string | null>(null);
   const seqRef = useRef<Record<string, number>>({});
+  const { start: monthStartStr, end: monthEndStr } = useMemo(() => {
+    const now = new Date();
+    const start = startOfMonth(now);
+    const end = endOfMonth(start);
+    return { start: format(start, "yyyy-MM-dd"), end: format(end, "yyyy-MM-dd") };
+  }, []);
 
   useEffect(() => {
     if (!factories.length) {
@@ -871,6 +879,15 @@ function Floor({
 
   const ordersQuery = useOrders(factory || undefined, false);
   const storageAggQuery = useStorageAgg(factory || undefined);
+  const { data: madeLogData } = useSWR(
+    factory ? ["made-log", factory, monthStartStr, monthEndStr] : null,
+    ([, factoryCode, start, end]) =>
+      fetchMadeLog({
+        factory: factoryCode,
+        start,
+        end,
+      }),
+  );
 
   const orders = useMemo(
     () => normalizeOrders(ordersQuery.data),
@@ -880,6 +897,16 @@ function Floor({
   const storageAgg = useMemo(
     () => normalizeStorage(storageAggQuery.data),
     [storageAggQuery.data],
+  );
+
+  const madeLogRows: MadeLogRow[] = madeLogData?.rows ?? [];
+  const visibleMadeLogRows = useMemo(
+    () =>
+      madeLogRows.filter(row => {
+        const child = isChildLot(row.lot_id);
+        return !(child && row.status === "全量使用");
+      }),
+    [madeLogRows],
   );
 
   useEffect(() => {
@@ -1093,6 +1120,48 @@ function Floor({
           onKeep={(order, values) => handleKeep(order, values)}
           onReportMade={(order, report) => handleReportMade(order, report)}
         />
+
+        <section className="mt-8">
+          <h2 className="text-base font-semibold mb-2">今月の製造実績</h2>
+          <div className="overflow-auto rounded-xl border border-slate-200 bg-white">
+            <table className="min-w-full text-sm">
+              <thead className="bg-amber-50 text-slate-700">
+                <tr>
+                  <th className="px-4 py-3 text-left font-semibold">製造日</th>
+                  <th className="px-4 py-3 text-left font-semibold">味付け</th>
+                  <th className="px-4 py-3 text-left font-semibold">ロット</th>
+                  <th className="px-4 py-3 text-right font-semibold">製造量</th>
+                  <th className="px-4 py-3 text-left font-semibold">ステータス</th>
+                </tr>
+              </thead>
+              <tbody className="[&>tr:nth-child(even)]:bg-orange-50/40">
+                {visibleMadeLogRows.map(row => (
+                  <tr key={row.action_id}>
+                    <td className="px-4 py-3 text-slate-700">{row.manufactured_at}</td>
+                    <td className="px-4 py-3 text-slate-700">{row.flavor_name}</td>
+                    <td className="px-4 py-3 text-slate-700">{row.lot_id}</td>
+                    <td className="px-4 py-3 text-right text-slate-700">
+                      {row.produced_grams.toLocaleString()} g
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      <StatusPill status={row.status} />
+                    </td>
+                  </tr>
+                ))}
+                {visibleMadeLogRows.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={5}
+                      className="px-4 py-6 text-center text-sm text-slate-400"
+                    >
+                      表示できるデータがありません
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
 
         <div className="text-xs text-slate-500">UIのみのモック / 既存API構造前提</div>
 
