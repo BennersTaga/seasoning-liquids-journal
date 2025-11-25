@@ -2311,7 +2311,7 @@ function OnsiteMakeDialog({
   const [manufacturedAt, setManufacturedAt] = useState(format(new Date(), "yyyy-MM-dd"));
   const [useCode, setUseCode] = useState(uses[0]?.code ?? "");
   const [oemPartner, setOemPartner] = useState(oemList[0] ?? "");
-  const [extraPacks, setExtraPacks] = useState<number>(0);
+  const [extraPacks, setExtraPacks] = useState<number | undefined>(undefined);
   const [extraMaterials, setExtraMaterials] = useState<MaterialLine[] | null>(null);
   const [outcome, setOutcome] = useState<"extra" | "used" | "">("");
   const [leftLoc, setLeftLoc] = useState("");
@@ -2329,7 +2329,7 @@ function OnsiteMakeDialog({
 
   const extraTotalGrams = useMemo(() => {
     const ptg = Number(flavor?.packToGram ?? 0);
-    const packs = Number.isFinite(extraPacks) ? extraPacks : 0;
+    const packs = typeof extraPacks === "number" && Number.isFinite(extraPacks) ? extraPacks : 0;
     return Math.max(0, Math.round(ptg * packs));
   }, [flavor, extraPacks]);
 
@@ -2403,14 +2403,16 @@ function OnsiteMakeDialog({
       setOutcome("");
       setLeftLoc("");
       setLeftG(0);
-      setExtraPacks(0);
+      setExtraPacks(undefined);
       setExtraMaterials(null);
       setManufacturedAt(format(new Date(), "yyyy-MM-dd"));
     }
   }, [open, defaultFlavorId, oemList, uses]);
 
   const submit = async () => {
+    const packsToSend = typeof extraPacks === "number" && Number.isFinite(extraPacks) ? extraPacks : undefined;
     if (busy) return;
+    if (packsToSend === undefined) return;
     if (extraTotalGrams <= 0) return;
     if (!normalizedUseCode) return;
     const leftover = outcome === "extra" && leftLoc && leftG > 0 ? { loc: leftLoc, grams: leftG } : undefined;
@@ -2437,7 +2439,7 @@ function OnsiteMakeDialog({
         leftover,
         undefined,
         materialsToSend,
-        extraPacks,
+        packsToSend,
       );
       onClose();
     } catch {
@@ -2451,6 +2453,22 @@ function OnsiteMakeDialog({
         <DialogHeader>
           <DialogTitle>追加で作成（現場報告）</DialogTitle>
         </DialogHeader>
+        <div className="space-y-2">
+          <Label>今回作成パック数</Label>
+          <Input
+            type="number"
+            value={extraPacks ?? ""}
+            onChange={e => {
+              const raw = e.target.value;
+              const v = Number.parseInt(raw, 10);
+              setExtraPacks(raw === "" ? undefined : Number.isFinite(v) ? Math.max(0, v) : undefined);
+            }}
+            inputMode="numeric"
+            placeholder="数字を入力してください"
+            required
+          />
+          <div className="text-xs text-muted-foreground mt-1">目安必要量: {formatGram(extraTotalGrams)}</div>
+        </div>
         <div className="grid md:grid-cols-3 gap-3">
           <div className="md:col-span-1">
             <Label>レシピ</Label>
@@ -2490,19 +2508,6 @@ function OnsiteMakeDialog({
             <Label>製造日</Label>
             <Input type="date" value={manufacturedAt} onChange={e => setManufacturedAt(e.target.value)} />
           </div>
-        </div>
-        <div className="space-y-2">
-          <Label>今回作成パック数</Label>
-          <Input
-            type="number"
-            value={extraPacks}
-            onChange={e => {
-              const v = Number.parseInt(e.target.value || "0", 10);
-              setExtraPacks(Number.isFinite(v) ? Math.max(0, v) : 0);
-            }}
-            inputMode="numeric"
-          />
-          <div className="text-xs text-muted-foreground mt-1">目安必要量: {formatGram(extraTotalGrams)}</div>
         </div>
         <div className="rounded-xl border p-3 space-y-3">
           <div className="text-sm font-medium">レシピ：{flavor.liquidName}</div>
