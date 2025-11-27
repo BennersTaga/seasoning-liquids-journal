@@ -432,6 +432,7 @@ function Office({
   const [flavor, setFlavor] = useState(flavors[0]?.id ?? "");
   const [useCode, setUseCode] = useState(uses[0]?.code ?? "");
   const [packs, setPacks] = useState(100);
+  const [packsInput, setPacksInput] = useState("100");
   const [oemPartner, setOemPartner] = useState(oemList[0] ?? "");
   const [oemGrams, setOemGrams] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -684,8 +685,13 @@ function Office({
               <Label>パック数</Label>
               <Input
                 type="number"
-                value={packs}
-                onChange={e => setPacks(Number.parseInt(e.target.value || "0", 10))}
+                value={packsInput}
+                onChange={e => {
+                  const v = e.target.value;
+                  setPacksInput(v);
+                  const n = Number.parseInt(v, 10);
+                  setPacks(Number.isNaN(n) ? 0 : n);
+                }}
                 className="w-full"
               />
               <div className="text-xs text-muted-foreground mt-1">
@@ -1538,11 +1544,14 @@ function FloorChildRow({
   const [useOpen, setUseOpen] = useState(false);
   const [wasteOpen, setWasteOpen] = useState(false);
   const [useQty, setUseQty] = useState(0);
+  const [useQtyInput, setUseQtyInput] = useState("");
   const [useOutcome, setUseOutcome] = useState<"extra" | "none" | "shortage" | "">("");
   const [leftQty, setLeftQty] = useState(0);
+  const [leftQtyInput, setLeftQtyInput] = useState("");
   const [loc, setLoc] = useState<string>(storageEntry.locations[0] || "");
   const [wasteReason, setWasteReason] = useState<"expiry" | "mistake" | "other" | "">("");
   const [wasteQty, setWasteQty] = useState(0);
+  const [wasteQtyInput, setWasteQtyInput] = useState("");
   const [wasteText, setWasteText] = useState("");
   const useRequestIdRef = useRef<string | null>(null);
   const wasteRequestIdRef = useRef<string | null>(null);
@@ -1552,8 +1561,10 @@ function FloorChildRow({
   useEffect(() => {
     if (useOpen) {
       setUseQty(0);
+      setUseQtyInput("");
       setUseOutcome("");
       setLeftQty(0);
+      setLeftQtyInput("");
       setLoc(storageEntry.locations[0] || "");
     }
   }, [useOpen, storageEntry.locations]);
@@ -1562,6 +1573,7 @@ function FloorChildRow({
     if (wasteOpen) {
       setWasteReason("");
       setWasteQty(0);
+      setWasteQtyInput("");
       setWasteText("");
       setLoc(storageEntry.locations[0] || "");
     }
@@ -1702,8 +1714,12 @@ function FloorChildRow({
                 <Label>使用量（g）</Label>
                 <Input
                   type="number"
-                  value={useQty}
-                  onChange={e => setUseQty(Number.parseInt(e.target.value || "0", 10))}
+                  value={useQtyInput}
+                  onChange={e => {
+                    const raw = e.target.value;
+                    setUseQtyInput(raw);
+                    setUseQty(Number.parseInt(raw || "0", 10));
+                  }}
                 />
               </div>
               <div>
@@ -1726,8 +1742,12 @@ function FloorChildRow({
                   <Label>余り数量（g）</Label>
                   <Input
                     type="number"
-                    value={leftQty}
-                    onChange={e => setLeftQty(Number.parseInt(e.target.value || "0", 10))}
+                    value={leftQtyInput}
+                    onChange={e => {
+                      const raw = e.target.value;
+                      setLeftQtyInput(raw);
+                      setLeftQty(Number.parseInt(raw || "0", 10));
+                    }}
                   />
                 </div>
                 <div>
@@ -1806,8 +1826,12 @@ function FloorChildRow({
                 <Label>廃棄量（g）</Label>
                 <Input
                   type="number"
-                  value={wasteQty}
-                  onChange={e => setWasteQty(Number.parseInt(e.target.value || "0", 10))}
+                  value={wasteQtyInput}
+                  onChange={e => {
+                    const raw = e.target.value;
+                    setWasteQtyInput(raw);
+                    setWasteQty(Number.parseInt(raw || "0", 10));
+                  }}
                 />
               </div>
             </div>
@@ -1926,6 +1950,7 @@ function KeepDialog({
 }) {
   const [loc, setLoc] = useState("");
   const [gramsValue, setGramsValue] = useState(0);
+  const [gramsInput, setGramsInput] = useState("");
   const [manufacturedAt, setManufacturedAt] = useState(format(new Date(), "yyyy-MM-dd"));
   const locations = storageByFactory[factoryCode] || [];
 
@@ -1933,6 +1958,7 @@ function KeepDialog({
     if (open) {
       setLoc("");
       setGramsValue(0);
+      setGramsInput("");
       setManufacturedAt(format(new Date(), "yyyy-MM-dd"));
     }
   }, [open]);
@@ -1976,8 +2002,12 @@ function KeepDialog({
               <Label>数量（g）</Label>
               <Input
                 type="number"
-                value={gramsValue}
-                onChange={e => setGramsValue(Number.parseInt(e.target.value || "0", 10))}
+                value={gramsInput}
+                onChange={e => {
+                  const raw = e.target.value;
+                  setGramsInput(raw);
+                  setGramsValue(Number.parseInt(raw || "0", 10));
+                }}
               />
             </div>
             <div>
@@ -2031,7 +2061,9 @@ function MadeDialog2({
   const [outcome, setOutcome] = useState<"extra" | "used" | "">("");
   const [leftLoc, setLeftLoc] = useState("");
   const [leftGrams, setLeftGrams] = useState(0);
+  const [leftGramsInput, setLeftGramsInput] = useState("");
   const [packsMade, setPacksMade] = useState(0);
+  const [packsMadeInput, setPacksMadeInput] = useState("");
   const line = order.lines[0];
   const flavor = findFlavor(line.flavorId);
   const showPackInput = line.useType === "fissule" && (line.packs || 0) > 0;
@@ -2045,11 +2077,13 @@ function MadeDialog2({
       setOutcome("");
       setLeftLoc("");
       setLeftGrams(0);
+      setLeftGramsInput("");
       setManufacturedAt(format(new Date(), "yyyy-MM-dd"));
       const def = showPackInput && mode === "bulk"
         ? Math.max(0, Math.min(line.packs || 0, remaining || line.packs || 0))
         : 0;
       setPacksMade(def);
+      setPacksMadeInput(def > 0 ? String(def) : "");
     }
   }, [open, flavor, line.packs, mode, remaining, showPackInput]);
 
@@ -2180,8 +2214,12 @@ function MadeDialog2({
               <Label>今回作成パック数</Label>
               <Input
                 type="number"
-                value={packsMade}
-                onChange={e => setPacksMade(Number.parseInt(e.target.value || "0", 10))}
+                value={packsMadeInput}
+                onChange={e => {
+                  const raw = e.target.value;
+                  setPacksMadeInput(raw);
+                  setPacksMade(Number.parseInt(raw || "0", 10));
+                }}
               />
               <div className={`text-xs mt-1 ${tooMuch ? "text-red-600" : ""}`}>
                 最大 残り {Math.max(0, remaining)} パック
@@ -2242,8 +2280,12 @@ function MadeDialog2({
               <Label>余り数量（g）</Label>
               <Input
                 type="number"
-                value={leftGrams}
-                onChange={e => setLeftGrams(Number.parseInt(e.target.value || "0", 10))}
+                value={leftGramsInput}
+                onChange={e => {
+                  const raw = e.target.value;
+                  setLeftGramsInput(raw);
+                  setLeftGrams(Number.parseInt(raw || "0", 10));
+                }}
               />
             </div>
           </div>
@@ -2316,6 +2358,7 @@ function OnsiteMakeDialog({
   const [outcome, setOutcome] = useState<"extra" | "used" | "">("");
   const [leftLoc, setLeftLoc] = useState("");
   const [leftG, setLeftG] = useState(0);
+  const [leftGInput, setLeftGInput] = useState("");
   const flavor = findFlavor(flavorId);
   const flavorDisabled = mastersLoading || flavors.length === 0;
   const purposeDisabled = mastersLoading || uses.length === 0;
@@ -2403,6 +2446,7 @@ function OnsiteMakeDialog({
       setOutcome("");
       setLeftLoc("");
       setLeftG(0);
+      setLeftGInput("");
       setExtraPacks(undefined);
       setExtraMaterials(null);
       setManufacturedAt(format(new Date(), "yyyy-MM-dd"));
@@ -2576,8 +2620,12 @@ function OnsiteMakeDialog({
                 <Label>余り数量（g）</Label>
                 <Input
                   type="number"
-                  value={leftG}
-                  onChange={e => setLeftG(Number.parseInt(e.target.value || "0", 10))}
+                  value={leftGInput}
+                  onChange={e => {
+                    const raw = e.target.value;
+                    setLeftGInput(raw);
+                    setLeftG(Number.parseInt(raw || "0", 10));
+                  }}
                 />
               </div>
             </>
@@ -2623,11 +2671,14 @@ function StorageCardView({
   const [useOpen, setUseOpen] = useState(false);
   const [wasteOpen, setWasteOpen] = useState(false);
   const [useQty, setUseQty] = useState(0);
+  const [useQtyInput, setUseQtyInput] = useState("");
   const [useOutcome, setUseOutcome] = useState<"extra" | "none" | "shortage" | "">("");
   const [leftQty, setLeftQty] = useState(0);
+  const [leftQtyInput, setLeftQtyInput] = useState("");
   const [loc, setLoc] = useState<string>(agg.locations[0] || "");
   const [wasteReason, setWasteReason] = useState<"expiry" | "mistake" | "other" | "">("");
   const [wasteQty, setWasteQty] = useState(0);
+  const [wasteQtyInput, setWasteQtyInput] = useState("");
   const [wasteText, setWasteText] = useState("");
   const [useBusy, setUseBusy] = useState(false);
   const [wasteBusy, setWasteBusy] = useState(false);
@@ -2641,8 +2692,10 @@ function StorageCardView({
   useEffect(() => {
     if (useOpen) {
       setUseQty(0);
+      setUseQtyInput("");
       setUseOutcome("");
       setLeftQty(0);
+      setLeftQtyInput("");
       setLoc(agg.locations[0] || "");
     }
   }, [useOpen, agg.locations]);
@@ -2651,6 +2704,7 @@ function StorageCardView({
     if (wasteOpen) {
       setWasteReason("");
       setWasteQty(0);
+      setWasteQtyInput("");
       setWasteText("");
       setLoc(agg.locations[0] || "");
     }
@@ -2793,8 +2847,12 @@ function StorageCardView({
                 <Label>使用量（g）</Label>
                 <Input
                   type="number"
-                  value={useQty}
-                  onChange={e => setUseQty(Number.parseInt(e.target.value || "0", 10))}
+                  value={useQtyInput}
+                  onChange={e => {
+                    const raw = e.target.value;
+                    setUseQtyInput(raw);
+                    setUseQty(Number.parseInt(raw || "0", 10));
+                  }}
                 />
               </div>
               <div>
@@ -2817,8 +2875,12 @@ function StorageCardView({
                   <Label>余り数量（g）</Label>
                   <Input
                     type="number"
-                    value={leftQty}
-                    onChange={e => setLeftQty(Number.parseInt(e.target.value || "0", 10))}
+                    value={leftQtyInput}
+                    onChange={e => {
+                      const raw = e.target.value;
+                      setLeftQtyInput(raw);
+                      setLeftQty(Number.parseInt(raw || "0", 10));
+                    }}
                   />
                 </div>
                 <div>
@@ -2878,8 +2940,12 @@ function StorageCardView({
                 <Label>廃棄量（g）</Label>
                 <Input
                   type="number"
-                  value={wasteQty}
-                  onChange={e => setWasteQty(Number.parseInt(e.target.value || "0", 10))}
+                  value={wasteQtyInput}
+                  onChange={e => {
+                    const raw = e.target.value;
+                    setWasteQtyInput(raw);
+                    setWasteQty(Number.parseInt(raw || "0", 10));
+                  }}
                 />
               </div>
               <div>
