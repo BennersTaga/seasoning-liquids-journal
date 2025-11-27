@@ -432,6 +432,7 @@ function Office({
   const [flavor, setFlavor] = useState(flavors[0]?.id ?? "");
   const [useCode, setUseCode] = useState(uses[0]?.code ?? "");
   const [packs, setPacks] = useState(100);
+  const [packsInput, setPacksInput] = useState("100");
   const [oemPartner, setOemPartner] = useState(oemList[0] ?? "");
   const [oemGrams, setOemGrams] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -684,8 +685,13 @@ function Office({
               <Label>パック数</Label>
               <Input
                 type="number"
-                value={packs}
-                onChange={e => setPacks(Number.parseInt(e.target.value || "0", 10))}
+                value={packsInput}
+                onChange={e => {
+                  const v = e.target.value;
+                  setPacksInput(v);
+                  const n = Number.parseInt(v, 10);
+                  setPacks(Number.isNaN(n) ? 0 : n);
+                }}
                 className="w-full"
               />
               <div className="text-xs text-muted-foreground mt-1">
