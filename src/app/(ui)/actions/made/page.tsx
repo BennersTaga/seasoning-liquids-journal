@@ -36,7 +36,7 @@ function MadeActionPageInner() {
   const initialMode = (searchParams.get("mode") as "bulk" | "split" | null) ?? "bulk";
 
   const mastersQuery = useMasters();
-  const { flavors, storageByFactory } = useMemo(
+  const { flavors, storageByFactory, reporters } = useMemo(
     () => deriveDataFromMasters(mastersQuery.data),
     [mastersQuery.data],
   );
@@ -68,7 +68,7 @@ function MadeActionPageInner() {
     return line.useType === "fissule" && (line.packs ?? 0) > 0;
   }, [targetOrder]);
 
-  const handleReportMade = async (report: MadeReport) => {
+  const handleReportMade = async (report: MadeReport, reporter: string) => {
     if (!targetOrder) return;
     const line = targetOrder.lines[0];
     const leftoverPayload =
@@ -102,13 +102,14 @@ function MadeActionPageInner() {
         "action",
         {
           type: "MADE_SPLIT",
-          factory_code: targetOrder.factoryCode,
-          lot_id: targetOrder.lotId,
-          flavor_id: line.flavorId,
-          payload: finalPayload,
-        },
-        { requestId },
-      );
+      factory_code: targetOrder.factoryCode,
+      lot_id: targetOrder.lotId,
+      flavor_id: line.flavorId,
+      payload: finalPayload,
+      by: reporter,
+    },
+    { requestId },
+  );
       await Promise.all([
         mutate(["orders", targetOrder.factoryCode, false]),
         mutate(["storage-agg", targetOrder.factoryCode]),
@@ -188,6 +189,7 @@ function MadeActionPageInner() {
                 storageByFactory={storageByFactory}
                 mastersLoading={mastersQuery.isLoading || (!mastersQuery.data && !mastersQuery.error)}
                 busy={busy}
+                reporters={reporters}
                 onCancel={() => router.push(returnTo)}
               />
             ) : (

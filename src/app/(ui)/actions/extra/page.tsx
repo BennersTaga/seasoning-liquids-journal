@@ -36,7 +36,7 @@ function ExtraActionPageInner() {
   const defaultFlavorParam = searchParams.get("flavor_id") ?? "";
 
   const mastersQuery = useMasters();
-  const { flavors, storageByFactory, oemList, uses, factories } = useMemo(
+  const { flavors, storageByFactory, oemList, uses, factories, reporters } = useMemo(
     () => deriveDataFromMasters(mastersQuery.data),
     [mastersQuery.data],
   );
@@ -78,6 +78,7 @@ function ExtraActionPageInner() {
     useCode: string,
     producedG: number,
     manufacturedAt: string,
+    reporter: string,
     oemPartner?: string,
     leftover?: { loc: string; grams: number },
     _lotId?: string,
@@ -102,6 +103,7 @@ function ExtraActionPageInner() {
       produced_grams: producedG,
       manufactured_at: manufacturedAt,
       oem_partner: useType === "oem" ? oemPartner ?? null : null,
+      by: reporter,
       leftover: leftover && leftover.grams > 0 ? { location: leftover.loc, grams: leftover.grams } : null,
       generated_lot_id: lotId,
       materials:
@@ -170,6 +172,7 @@ function ExtraActionPageInner() {
               storageByFactory={storageByFactory}
               mastersLoading={mastersQuery.isLoading || (!mastersQuery.data && !mastersQuery.error)}
               uses={uses}
+              reporters={reporters}
               onCancel={() => router.push(returnTo)}
             />
           </CardContent>

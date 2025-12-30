@@ -19,6 +19,7 @@ import {
   type MadeReport,
   type MaterialLine,
   type OrderCard,
+  type Reporter,
   defaultFlavor,
   formatGram,
   selectFallback,
@@ -30,7 +31,8 @@ type KeepActionFormProps = {
   storageByFactory: Record<string, string[]>;
   mastersLoading: boolean;
   busy?: boolean;
-  onSubmit: (values: KeepFormValues) => Promise<void>;
+  reporters?: Reporter[];
+  onSubmit: (values: KeepFormValues, reporter: string) => Promise<void>;
   onCancel?: () => void;
   onSubmitted?: () => void;
   submitLabel?: string;
@@ -43,12 +45,14 @@ export function KeepActionForm({
   storageByFactory,
   mastersLoading,
   busy,
+  reporters = [],
   onSubmit,
   onCancel,
   onSubmitted,
   submitLabel = "登録",
   cancelLabel = "キャンセル",
 }: KeepActionFormProps) {
+  const [reporter, setReporter] = useState("");
   const [loc, setLoc] = useState("");
   const [gramsValue, setGramsValue] = useState(0);
   const [gramsInput, setGramsInput] = useState("");
@@ -56,9 +60,14 @@ export function KeepActionForm({
     format(new Date(), "yyyy-MM-dd"),
   );
   const locations = storageByFactory[factoryCode] || [];
+  const reporterOptions = useMemo(
+    () => reporters.filter(r => !r.factoryCode || r.factoryCode === factoryCode),
+    [reporters, factoryCode],
+  );
 
   useEffect(() => {
     if (open) {
+      setReporter("");
       setLoc("");
       setGramsValue(0);
       setGramsInput("");
@@ -67,9 +76,9 @@ export function KeepActionForm({
   }, [open, factoryCode]);
 
   const handleSubmit = async () => {
-    if (busy || !loc || gramsValue <= 0 || !manufacturedAt) return;
+    if (busy || !loc || gramsValue <= 0 || !manufacturedAt || !reporter) return;
     try {
-      await onSubmit({ location: loc, grams: gramsValue, manufacturedAt });
+      await onSubmit({ location: loc, grams: gramsValue, manufacturedAt }, reporter);
       onSubmitted?.();
     } catch {
       // keep form open
@@ -78,6 +87,23 @@ export function KeepActionForm({
 
   return (
     <div className="space-y-4">
+      <div>
+        <Label>報告者</Label>
+        <Select value={reporter} onValueChange={setReporter}>
+          <SelectTrigger disabled={mastersLoading || reporterOptions.length === 0}>
+            <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
+          </SelectTrigger>
+          <SelectContent>
+            {reporterOptions.length
+              ? reporterOptions.map(r => (
+                  <SelectItem key={r.id} value={r.name}>
+                    {r.name}
+                  </SelectItem>
+                ))
+              : selectFallback(mastersLoading, "選択肢なし")}
+          </SelectContent>
+        </Select>
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <div>
           <Label>保管場所</Label>
@@ -124,7 +150,7 @@ export function KeepActionForm({
           </Button>
         )}
         <Button
-          disabled={busy || !loc || gramsValue <= 0 || !manufacturedAt}
+          disabled={busy || !loc || gramsValue <= 0 || !manufacturedAt || !reporter}
           onClick={handleSubmit}
         >
           {submitLabel}
@@ -139,11 +165,12 @@ type MadeActionFormProps = {
   order: OrderCard;
   mode: "bulk" | "split";
   remaining: number;
-  onReport: (report: MadeReport) => Promise<void>;
+  onReport: (report: MadeReport, reporter: string) => Promise<void>;
   findFlavor: (id: string) => FlavorWithRecipe;
   storageByFactory: Record<string, string[]>;
   mastersLoading: boolean;
   busy?: boolean;
+  reporters?: Reporter[];
   onCancel?: () => void;
   onSubmitted?: () => void;
   submitLabel?: string;
@@ -160,6 +187,7 @@ export function MadeActionForm({
   storageByFactory,
   mastersLoading,
   busy,
+  reporters = [],
   onCancel,
   onSubmitted,
   submitLabel = "登録",
@@ -175,13 +203,19 @@ export function MadeActionForm({
   const [leftGramsInput, setLeftGramsInput] = useState("");
   const [packsMade, setPacksMade] = useState(0);
   const [packsMadeInput, setPacksMadeInput] = useState("");
+  const [reporter, setReporter] = useState("");
   const line = order.lines[0];
   const flavor = findFlavor(line.flavorId) ?? defaultFlavor;
   const showPackInput = line.useType === "fissule" && (line.packs || 0) > 0;
   const locations = storageByFactory[order.factoryCode] || [];
+  const reporterOptions = useMemo(
+    () => reporters.filter(r => !r.factoryCode || r.factoryCode === order.factoryCode),
+    [reporters, order.factoryCode],
+  );
 
   useEffect(() => {
     if (open) {
+      setReporter("");
       setChecked({});
       setReported({});
       setExpected({});
@@ -225,6 +259,7 @@ export function MadeActionForm({
 
   const submit = async () => {
     if (busy) return;
+    if (!reporter) return;
     if (showPackInput && (packsMade <= 0 || tooMuch)) return;
     if (outcome !== "extra" && outcome !== "used") return;
     const packsValue = showPackInput ? packsMade : 0;
@@ -253,14 +288,17 @@ export function MadeActionForm({
       .filter(m => m !== null) as MaterialLine[];
 
     try {
-      await onReport({
-        packs: packsValue,
-        grams: gramsValue,
-        manufacturedAt,
-        result: outcome,
-        leftover: leftoverPayload,
-        materials,
-      });
+      await onReport(
+        {
+          packs: packsValue,
+          grams: gramsValue,
+          manufacturedAt,
+          result: outcome,
+          leftover: leftoverPayload,
+          materials,
+        },
+        reporter,
+      );
       onSubmitted?.();
     } catch {
       // keep form open
@@ -269,6 +307,23 @@ export function MadeActionForm({
 
   return (
     <div className="space-y-4">
+      <div>
+        <Label>報告者</Label>
+        <Select value={reporter} onValueChange={setReporter}>
+          <SelectTrigger disabled={mastersLoading || reporterOptions.length === 0}>
+            <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
+          </SelectTrigger>
+          <SelectContent>
+            {reporterOptions.length
+              ? reporterOptions.map(r => (
+                  <SelectItem key={r.id} value={r.name}>
+                    {r.name}
+                  </SelectItem>
+                ))
+              : selectFallback(mastersLoading, "選択肢なし")}
+          </SelectContent>
+        </Select>
+      </div>
       <div className="rounded-xl border p-3 space-y-3">
         <div className="text-sm font-medium">レシピ：{flavor.liquidName}</div>
         {flavor.recipe.map(r => {
@@ -416,6 +471,7 @@ export function MadeActionForm({
         <Button
           disabled={
             busy ||
+            !reporter ||
             !manufacturedAt ||
             (showPackInput && (packsMade <= 0 || tooMuch)) ||
             (outcome === "extra" && (!leftLoc || leftGrams <= 0)) ||
@@ -441,6 +497,7 @@ type OnsiteMakeFormProps = {
     useCode: string,
     producedG: number,
     manufacturedAt: string,
+    reporter: string,
     oemPartner?: string,
     leftover?: { loc: string; grams: number },
     lotId?: string,
@@ -454,6 +511,7 @@ type OnsiteMakeFormProps = {
   storageByFactory: Record<string, string[]>;
   mastersLoading: boolean;
   uses: { code: string; name: string; type: "fissule" | "oem" }[];
+  reporters?: Reporter[];
   onCancel?: () => void;
   onSubmitted?: () => void;
   submitLabel?: string;
@@ -472,6 +530,7 @@ export function OnsiteMakeForm({
   storageByFactory,
   mastersLoading,
   uses,
+  reporters = [],
   onCancel,
   onSubmitted,
   submitLabel = "登録",
@@ -487,10 +546,15 @@ export function OnsiteMakeForm({
   const [leftLoc, setLeftLoc] = useState("");
   const [leftG, setLeftG] = useState(0);
   const [leftGInput, setLeftGInput] = useState("");
+  const [reporter, setReporter] = useState("");
   const flavor = findFlavor(flavorId);
   const flavorDisabled = mastersLoading || flavors.length === 0;
   const purposeDisabled = mastersLoading || uses.length === 0;
   const locations = storageByFactory[factoryCode] || [];
+  const reporterOptions = useMemo(
+    () => reporters.filter(r => !r.factoryCode || r.factoryCode === factoryCode),
+    [reporters, factoryCode],
+  );
   const normalizedUseCode = useMemo(() => useCode.trim(), [useCode]);
   const selectedUse = useMemo(
     () => uses.find(u => u.code === normalizedUseCode) ?? uses.find(u => u.code === useCode),
@@ -568,6 +632,7 @@ export function OnsiteMakeForm({
 
   useEffect(() => {
     if (open) {
+      setReporter("");
       setFlavorId(defaultFlavorId);
       setUseCode(uses[0]?.code ?? "");
       setOemPartner(oemList[0] ?? "");
@@ -588,6 +653,7 @@ export function OnsiteMakeForm({
     if (packsToSend === undefined) return;
     if (extraTotalGrams <= 0) return;
     if (!normalizedUseCode) return;
+    if (!reporter) return;
     const leftover =
       outcome === "extra" && leftLoc && leftG > 0 ? { loc: leftLoc, grams: leftG } : undefined;
     const materialsToSend: MaterialLine[] = (extraMaterials ?? recommendedMaterials).map(m => {
@@ -609,6 +675,7 @@ export function OnsiteMakeForm({
         normalizedUseCode,
         extraTotalGrams,
         manufacturedAt,
+        reporter,
         derivedUseType === "oem" ? oemPartner : undefined,
         leftover,
         undefined,
@@ -623,6 +690,23 @@ export function OnsiteMakeForm({
 
   return (
     <div className="space-y-4">
+      <div>
+        <Label>報告者</Label>
+        <Select value={reporter} onValueChange={setReporter}>
+          <SelectTrigger disabled={mastersLoading || reporterOptions.length === 0}>
+            <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
+          </SelectTrigger>
+          <SelectContent>
+            {reporterOptions.length
+              ? reporterOptions.map(r => (
+                  <SelectItem key={r.id} value={r.name}>
+                    {r.name}
+                  </SelectItem>
+                ))
+              : selectFallback(mastersLoading, "選択肢なし")}
+          </SelectContent>
+        </Select>
+      </div>
       <div className="space-y-2">
         <Label>今回作成パック数</Label>
         <Input
@@ -774,6 +858,7 @@ export function OnsiteMakeForm({
         <Button
           disabled={
             busy ||
+            !reporter ||
             extraTotalGrams <= 0 ||
             !manufacturedAt ||
             !normalizedUseCode ||
