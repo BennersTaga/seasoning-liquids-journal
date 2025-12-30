@@ -3,6 +3,28 @@ var __root = this;
 var __previousDoGet = typeof __root.doGet === 'function' ? __root.doGet : null;
 var __previousDoPost = typeof __root.doPost === 'function' ? __root.doPost : null;
 var TZ = 'Asia/Tokyo';
+var __lastByForAction = '';
+var SHEET = __root.SHEET || {
+  ORDERS: 'ORDERS',
+  ACTIONS: 'ACTIONS',
+  MATERIAL_ACTIONS: 'MATERIAL_ACTIONS',
+  STORAGE_LEDGER: 'STORAGE_LEDGER',
+};
+SHEET.M_REP = SHEET.M_REP || 'M_報告者';
+
+var __previousReadMasters = typeof __root.readMasters_ === 'function' ? __root.readMasters_ : null;
+var __previousAppendActionAndLedger = typeof __root.appendActionAndLedger_ === 'function' ? __root.appendActionAndLedger_ : null;
+
+function readMasters_() {
+  var masters = __previousReadMasters ? __previousReadMasters() : {};
+  try {
+    var ss = SpreadsheetApp.getActive();
+    masters.reporters = readReporters_(ss);
+  } catch (error) {
+    masters.reporters = masters.reporters || [];
+  }
+  return masters;
+}
 
 function doGet(e) {
   var params = (e && e.parameter) || {};
@@ -35,6 +57,7 @@ function doPost(e) {
     var parseMessage = error && error.message ? String(error.message) : 'invalid JSON body';
     return jsonResponse_({ ok: false, error: parseMessage }, 400);
   }
+  __lastByForAction = String(data.by || '').trim();
 
   var requestId = String(data.request_id || '').trim();
   if (!requestId) {
@@ -491,6 +514,18 @@ function processRequestPath_(ss, path, data, e) {
   return body;
 }
 
+function appendActionAndLedger_(record) {
+  ensureActionsByColumn_();
+  var recordWithBy = record || {};
+  if (!recordWithBy.by) {
+    recordWithBy.by = __lastByForAction || '';
+  }
+  if (__previousAppendActionAndLedger) {
+    return __previousAppendActionAndLedger(recordWithBy);
+  }
+  return null;
+}
+
 function createOnsiteMake_(body) {
   var today = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd');
   var lotId = String(body.lot_id || body.generated_lot_id || '').trim();
@@ -527,6 +562,7 @@ function createOnsiteMake_(body) {
     lot_id: lotId,
     flavor_id: body.flavor_id,
     payload: payload,
+    by: body.by || '',
   });
 
   return { ok: true, lot_id: lotId };
@@ -558,6 +594,53 @@ function readSheetObjects_(ss, name) {
     }
   }
   return rows;
+}
+
+function ensureActionsByColumn_() {
+  var sheetName = SHEET.ACTIONS || 'ACTIONS';
+  var ss = SpreadsheetApp.getActive();
+  var sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+  var lastCol = Math.max(1, sheet.getLastColumn());
+  var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  var hasBy = false;
+  for (var i = 0; i < headers.length; i++) {
+    if (String(headers[i] || '').trim().toLowerCase() === 'by') {
+      hasBy = true;
+      break;
+    }
+  }
+  if (!hasBy) {
+    headers.push('by');
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  }
+}
+
+function readReporters_(ss) {
+  var rows = readSheetObjects_(ss, SHEET.M_REP || 'M_報告者');
+  return rows
+    .filter(function(row) {
+      return String(row.active || '').toLowerCase() !== 'no';
+    })
+    .map(function(row) {
+      var sortRaw = String(row.sort_order || '').trim();
+      var sortValue = sortRaw === '' ? null : toNumber_(row.sort_order);
+      return {
+        reporter_id: row.reporter_id || row.reporter_name || '',
+        reporter_name: row.reporter_name || row.reporter_id || '',
+        factory_code: row.factory_code || '',
+        active: row.active,
+        sort_order: sortValue,
+      };
+    })
+    .filter(function(row) { return row.reporter_id && row.reporter_name; })
+    .sort(function(a, b) {
+      var aOrder = typeof a.sort_order === 'number' && !isNaN(a.sort_order) ? a.sort_order : Number.MAX_SAFE_INTEGER;
+      var bOrder = typeof b.sort_order === 'number' && !isNaN(b.sort_order) ? b.sort_order : Number.MAX_SAFE_INTEGER;
+      if (aOrder === bOrder) {
+        return String(a.reporter_name || '').localeCompare(String(b.reporter_name || ''), 'ja');
+      }
+      return aOrder - bOrder;
+    });
 }
 
 function parsePayload_(payload) {

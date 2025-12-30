@@ -1,11 +1,19 @@
 export type UseType = 'fissule' | 'oem';
 
 export interface RecipeRow { flavor_id: string; row_no: number; ingredient_name: string; qty: number; unit: string }
+export interface ReporterRow {
+  reporter_id?: string;
+  reporter_name?: string;
+  factory_code?: string | null;
+  active?: string | null;
+  sort_order?: number | string | null;
+}
 export interface Masters {
   factories: { factory_code: string; factory_name: string }[];
   locations: { factory_code: string; location_name: string }[];
   uses?: { use_code: string; use_name: string; use_type: UseType }[];
   use_flavors?: { use_code: string; flavor_id: string }[];
+  reporters?: ReporterRow[];
   flavors: {
     flavor_id: string;
     flavor_name: string;
