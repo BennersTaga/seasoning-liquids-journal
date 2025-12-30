@@ -55,11 +55,12 @@ export interface StorageAggEntry {
   manufacturedAt: string;
 }
 
+/** UI用：報告者 */
 export interface Reporter {
-  id: string;
-  name: string;
-  factoryCode?: string;
-  sortOrder: number;
+  id: string;              // reporter_id（無ければ reporter_name）
+  name: string;            // reporter_name（表示名）
+  factoryCode?: string;    // 工場限定（任意）
+  sortOrder: number;       // 表示順（未設定は末尾）
 }
 
 export type MadeReport = {
@@ -69,10 +70,10 @@ export type MadeReport = {
   result: "extra" | "used";
   leftover?: { location: string; grams: number } | null;
   materials?: MaterialLine[];
-  by?: string;
 };
 
-export type KeepFormValues = { location: string; grams: number; manufacturedAt: string; by?: string };
+/** 保管フォームの入力値。by はここに含めず、ページ側で別管理して送る */
+export type KeepFormValues = { location: string; grams: number; manufacturedAt: string };
 
 export const defaultFlavor: FlavorWithRecipe = {
   id: "",
@@ -145,36 +146,36 @@ export function deriveDataFromMasters(masters?: Masters) {
 
   const allowedByUse: Record<string, Set<string>> = {};
   masters?.use_flavors?.forEach(row => {
-    if (!allowedByUse[row.use_code]) {
-      allowedByUse[row.use_code] = new Set();
-    }
+    if (!allowedByUse[row.use_code]) allowedByUse[row.use_code] = new Set();
     allowedByUse[row.use_code].add(row.flavor_id);
   });
 
+  // ★報告者（未対応環境でも落ちないように常に配列で返す）
   const reporters: Reporter[] =
     masters?.reporters
-      ?.filter(rep => String(rep.active || "").toLowerCase() !== "no")
-      ?.map(rep => ({
-        id: rep.reporter_id || rep.reporter_name || "",
-        name: rep.reporter_name || rep.reporter_id || "",
-        factoryCode: rep.factory_code || undefined,
-        sortOrder: (() => {
-          const raw = rep.sort_order as number | string | null | undefined;
-          if (typeof raw === "number" && !Number.isNaN(raw)) return raw;
-          if (raw === null || raw === undefined) return Number.MAX_SAFE_INTEGER;
-          const trimmed = String(raw).trim();
-          if (!trimmed) return Number.MAX_SAFE_INTEGER;
-          const parsed = Number(trimmed);
-          return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
-        })(),
-      }))
-      ?.filter(rep => !!rep.id && !!rep.name)
-      ?.sort((a, b) => {
-        if (a.sortOrder === b.sortOrder) {
-          return a.name.localeCompare(b.name, "ja");
-        }
-        return a.sortOrder - b.sortOrder;
-      }) ?? [];
+      ?.filter(rep => String((rep as any).active || "").toLowerCase() !== "no")
+      ?.map(rep => {
+        const id = (rep as any).reporter_id || (rep as any).reporter_name || "";
+        const name = (rep as any).reporter_name || (rep as any).reporter_id || "";
+        const factoryCode = (rep as any).factory_code || undefined;
+
+        const raw = (rep as any).sort_order as number | string | null | undefined;
+        const sortOrder =
+          typeof raw === "number" && Number.isFinite(raw)
+            ? raw
+            : raw == null || String(raw).trim() === ""
+              ? Number.MAX_SAFE_INTEGER
+              : Number(String(raw));
+
+        return {
+          id,
+          name,
+          factoryCode,
+          sortOrder: Number.isFinite(sortOrder) ? sortOrder : Number.MAX_SAFE_INTEGER,
+        };
+      })
+      ?.filter(r => !!r.id && !!r.name)
+      ?.sort((a, b) => (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name, "ja")) ?? [];
 
   return { factories, storageByFactory, flavors, oemList, uses, allowedByUse, reporters };
 }

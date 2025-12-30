@@ -26,13 +26,15 @@ import {
   selectFallback,
 } from "@/app/(ui)/prototype/shared";
 
+/** -------------------- KEEP -------------------- */
+
 type KeepActionFormProps = {
   open?: boolean;
   factoryCode: string;
   storageByFactory: Record<string, string[]>;
   mastersLoading: boolean;
   busy?: boolean;
-  reporters: Reporter[];
+  reporters?: Reporter[];
   onSubmit: (values: KeepFormValues, reporter: string) => Promise<void>;
   onCancel?: () => void;
   onSubmitted?: () => void;
@@ -46,7 +48,7 @@ export function KeepActionForm({
   storageByFactory,
   mastersLoading,
   busy,
-  reporters,
+  reporters = [],
   onSubmit,
   onCancel,
   onSubmitted,
@@ -57,32 +59,28 @@ export function KeepActionForm({
   const [loc, setLoc] = useState("");
   const [gramsValue, setGramsValue] = useState(0);
   const [gramsInput, setGramsInput] = useState("");
-  const [manufacturedAt, setManufacturedAt] = useState(
-    format(new Date(), "yyyy-MM-dd"),
-  );
+  const [manufacturedAt, setManufacturedAt] = useState(format(new Date(), "yyyy-MM-dd"));
+
   const locations = storageByFactory[factoryCode] || [];
+
   const reporterOptions = useMemo(
     () => reporters.filter(r => !r.factoryCode || r.factoryCode === factoryCode),
     [reporters, factoryCode],
   );
 
   useEffect(() => {
-    if (open) {
-      setReporter("");
-      setLoc("");
-      setGramsValue(0);
-      setGramsInput("");
-      setManufacturedAt(format(new Date(), "yyyy-MM-dd"));
-    }
+    if (!open) return;
+    setReporter("");
+    setLoc("");
+    setGramsValue(0);
+    setGramsInput("");
+    setManufacturedAt(format(new Date(), "yyyy-MM-dd"));
   }, [open, factoryCode]);
 
   const handleSubmit = async () => {
     if (busy || !loc || gramsValue <= 0 || !manufacturedAt || !reporter) return;
     try {
-      await onSubmit(
-        { location: loc, grams: gramsValue, manufacturedAt, by: reporter },
-        reporter,
-      );
+      await onSubmit({ location: loc, grams: gramsValue, manufacturedAt }, reporter);
       onSubmitted?.();
     } catch {
       // keep form open
@@ -108,6 +106,7 @@ export function KeepActionForm({
           </SelectContent>
         </Select>
       </div>
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <div>
           <Label>保管場所</Label>
@@ -126,6 +125,7 @@ export function KeepActionForm({
             </SelectContent>
           </Select>
         </div>
+
         <div>
           <Label>数量（g）</Label>
           <Input
@@ -138,15 +138,13 @@ export function KeepActionForm({
             }}
           />
         </div>
+
         <div>
           <Label>製造日</Label>
-          <Input
-            type="date"
-            value={manufacturedAt}
-            onChange={e => setManufacturedAt(e.target.value)}
-          />
+          <Input type="date" value={manufacturedAt} onChange={e => setManufacturedAt(e.target.value)} />
         </div>
       </div>
+
       <div className="flex justify-end gap-2">
         {onCancel && (
           <Button variant="secondary" onClick={onCancel}>
@@ -164,6 +162,8 @@ export function KeepActionForm({
   );
 }
 
+/** -------------------- MADE -------------------- */
+
 type MadeActionFormProps = {
   open?: boolean;
   order: OrderCard;
@@ -174,7 +174,7 @@ type MadeActionFormProps = {
   storageByFactory: Record<string, string[]>;
   mastersLoading: boolean;
   busy?: boolean;
-  reporters: Reporter[];
+  reporters?: Reporter[];
   factoryCode: string;
   onModeChange?: (mode: "bulk" | "split") => void;
   onCancel?: () => void;
@@ -193,7 +193,7 @@ export function MadeActionForm({
   storageByFactory,
   mastersLoading,
   busy,
-  reporters,
+  reporters = [],
   factoryCode,
   onModeChange,
   onCancel,
@@ -212,33 +212,36 @@ export function MadeActionForm({
   const [packsMade, setPacksMade] = useState(0);
   const [packsMadeInput, setPacksMadeInput] = useState("");
   const [reporter, setReporter] = useState("");
+
   const line = order.lines[0];
   const flavor = findFlavor(line.flavorId) ?? defaultFlavor;
+
   const showPackInput = line.useType === "fissule" && (line.packs || 0) > 0;
   const locations = storageByFactory[order.factoryCode] || [];
+
   const reporterOptions = useMemo(
     () => reporters.filter(r => !r.factoryCode || r.factoryCode === factoryCode),
     [reporters, factoryCode],
   );
 
   useEffect(() => {
-    if (open) {
-      setReporter("");
-      setChecked({});
-      setReported({});
-      setExpected({});
-      setOutcome("");
-      setLeftLoc("");
-      setLeftGrams(0);
-      setLeftGramsInput("");
-      setManufacturedAt(format(new Date(), "yyyy-MM-dd"));
-      const def =
-        showPackInput && mode === "bulk"
-          ? Math.max(0, Math.min(line.packs || 0, remaining || line.packs || 0))
-          : 0;
-      setPacksMade(def);
-      setPacksMadeInput(def > 0 ? String(def) : "");
-    }
+    if (!open) return;
+    setReporter("");
+    setChecked({});
+    setReported({});
+    setExpected({});
+    setOutcome("");
+    setLeftLoc("");
+    setLeftGrams(0);
+    setLeftGramsInput("");
+    setManufacturedAt(format(new Date(), "yyyy-MM-dd"));
+
+    const def =
+      showPackInput && mode === "bulk"
+        ? Math.max(0, Math.min(line.packs || 0, remaining || line.packs || 0))
+        : 0;
+    setPacksMade(def);
+    setPacksMadeInput(def > 0 ? String(def) : "");
   }, [open, flavor, line.packs, mode, remaining, showPackInput]);
 
   const tooMuch = showPackInput && packsMade > Math.max(0, remaining);
@@ -270,12 +273,12 @@ export function MadeActionForm({
     if (!reporter) return;
     if (showPackInput && (packsMade <= 0 || tooMuch)) return;
     if (outcome !== "extra" && outcome !== "used") return;
+
     const packsValue = showPackInput ? packsMade : 0;
     const gramsValue = grams;
+
     const leftoverPayload =
-      outcome === "extra" && leftGrams > 0 && leftLoc
-        ? { location: leftLoc, grams: leftGrams }
-        : null;
+      outcome === "extra" && leftGrams > 0 && leftLoc ? { location: leftLoc, grams: leftGrams } : null;
 
     const materials: MaterialLine[] = flavor.recipe
       .map((r): MaterialLine | null => {
@@ -291,19 +294,22 @@ export function MadeActionForm({
           unit: "g",
           store_location: "",
           source: "entered",
-        } as MaterialLine;
+        };
       })
-      .filter(m => m !== null) as MaterialLine[];
+      .filter((m): m is MaterialLine => m !== null);
 
     try {
-      await onReport({
-        packs: packsValue,
-        grams: gramsValue,
-        manufacturedAt,
-        result: outcome,
-        leftover: leftoverPayload,
-        materials,
-      }, reporter);
+      await onReport(
+        {
+          packs: packsValue,
+          grams: gramsValue,
+          manufacturedAt,
+          result: outcome,
+          leftover: leftoverPayload,
+          materials,
+        },
+        reporter,
+      );
       onSubmitted?.();
     } catch {
       // keep form open
@@ -329,6 +335,7 @@ export function MadeActionForm({
           </SelectContent>
         </Select>
       </div>
+
       {showPackInput ? (
         <div className="grid md:grid-cols-3 gap-3 bg-muted/30 rounded-md p-3 items-end">
           <div className="md:col-span-2">
@@ -348,50 +355,38 @@ export function MadeActionForm({
           </div>
           <div>
             <Label>製造日</Label>
-            <Input
-              type="date"
-              value={manufacturedAt}
-              onChange={e => setManufacturedAt(e.target.value)}
-            />
+            <Input type="date" value={manufacturedAt} onChange={e => setManufacturedAt(e.target.value)} />
           </div>
         </div>
       ) : (
         <div className="grid md:grid-cols-3 gap-3 bg-muted/30 rounded-md p-3">
           {line.useType === "oem" && (
-            <Field label="作成量">
-              {formatGram(line.oemGrams || line.requiredGrams)}
-            </Field>
+            <Field label="作成量">{formatGram(line.oemGrams || line.requiredGrams)}</Field>
           )}
           <Field label="製造日">
-            <Input
-              type="date"
-              value={manufacturedAt}
-              onChange={e => setManufacturedAt(e.target.value)}
-            />
+            <Input type="date" value={manufacturedAt} onChange={e => setManufacturedAt(e.target.value)} />
           </Field>
         </div>
       )}
-      <div>
-        <Tabs
-          className="w-full"
-          value={mode}
-          onValueChange={value => onModeChange?.(value as "bulk" | "split")}
-        >
-          <TabsList>
-            <TabsTrigger value="bulk">一括で作った</TabsTrigger>
-            <TabsTrigger value="split" disabled={!showPackInput}>
-              分割して作った
-            </TabsTrigger>
-          </TabsList>
-          {!showPackInput && (
-            <div className="text-xs text-muted-foreground mt-2">
-              OEM やパック数未設定の指示では分割できません
-            </div>
-          )}
-          <TabsContent value="bulk" />
-          <TabsContent value="split" />
-        </Tabs>
-      </div>
+
+      {onModeChange && (
+        <div>
+          <Tabs className="w-full" value={mode} onValueChange={v => onModeChange(v as "bulk" | "split")}>
+            <TabsList>
+              <TabsTrigger value="bulk">一括で作った</TabsTrigger>
+              <TabsTrigger value="split" disabled={!showPackInput}>
+                分割して作った
+              </TabsTrigger>
+            </TabsList>
+            {!showPackInput && (
+              <div className="text-xs text-muted-foreground mt-2">OEM やパック数未設定の指示では分割できません</div>
+            )}
+            <TabsContent value="bulk" />
+            <TabsContent value="split" />
+          </Tabs>
+        </div>
+      )}
+
       <div className="rounded-xl border p-3 space-y-3">
         <div className="text-sm font-medium">レシピ：{flavor.liquidName}</div>
         {flavor.recipe.map(r => {
@@ -436,11 +431,13 @@ export function MadeActionForm({
           );
         })}
       </div>
-      {mode === "split" && showPackInput && (
+
+      {mode === "split" && (
         <div className="text-xs text-muted-foreground">
           登録時にロット番号は <span className="font-mono">{order.lotId}-XX</span>（通し番号）として保存されます。
         </div>
       )}
+
       <div className="grid md:grid-cols-3 gap-3 mt-2">
         <div>
           <Label>結果</Label>
@@ -455,6 +452,7 @@ export function MadeActionForm({
           </Select>
         </div>
       </div>
+
       {outcome === "extra" && (
         <div className="grid md:grid-cols-2 gap-3 border rounded-xl p-3">
           <div>
@@ -474,6 +472,7 @@ export function MadeActionForm({
               </SelectContent>
             </Select>
           </div>
+
           <div>
             <Label>余り数量（g）</Label>
             <Input
@@ -488,6 +487,7 @@ export function MadeActionForm({
           </div>
         </div>
       )}
+
       <div className="flex justify-end gap-2">
         {onCancel && (
           <Button variant="secondary" onClick={onCancel}>
@@ -511,6 +511,8 @@ export function MadeActionForm({
     </div>
   );
 }
+
+/** -------------------- ONSITE MAKE (EXTRA) -------------------- */
 
 type OnsiteMakeFormProps = {
   open?: boolean;
@@ -537,7 +539,7 @@ type OnsiteMakeFormProps = {
   storageByFactory: Record<string, string[]>;
   mastersLoading: boolean;
   uses: { code: string; name: string; type: "fissule" | "oem" }[];
-  reporters: Reporter[];
+  reporters?: Reporter[];
   onCancel?: () => void;
   onSubmitted?: () => void;
   submitLabel?: string;
@@ -556,7 +558,7 @@ export function OnsiteMakeForm({
   storageByFactory,
   mastersLoading,
   uses,
-  reporters,
+  reporters = [],
   onCancel,
   onSubmitted,
   submitLabel = "登録",
@@ -573,14 +575,17 @@ export function OnsiteMakeForm({
   const [leftG, setLeftG] = useState(0);
   const [leftGInput, setLeftGInput] = useState("");
   const [reporter, setReporter] = useState("");
+
   const flavor = findFlavor(flavorId);
   const flavorDisabled = mastersLoading || flavors.length === 0;
   const purposeDisabled = mastersLoading || uses.length === 0;
   const locations = storageByFactory[factoryCode] || [];
+
   const reporterOptions = useMemo(
     () => reporters.filter(r => !r.factoryCode || r.factoryCode === factoryCode),
     [reporters, factoryCode],
   );
+
   const normalizedUseCode = useMemo(() => useCode.trim(), [useCode]);
   const selectedUse = useMemo(
     () => uses.find(u => u.code === normalizedUseCode) ?? uses.find(u => u.code === useCode),
@@ -622,28 +627,18 @@ export function OnsiteMakeForm({
 
   useEffect(() => {
     if (!uses.length) {
-      if (useCode !== "") {
-        setUseCode("");
-      }
+      if (useCode !== "") setUseCode("");
       return;
     }
-    if (!useCode || !uses.some(u => u.code === useCode)) {
-      setUseCode(uses[0].code);
-    }
+    if (!useCode || !uses.some(u => u.code === useCode)) setUseCode(uses[0].code);
   }, [uses, useCode]);
 
   useEffect(() => {
     if (!open) return;
     setExtraMaterials(prev => {
-      if (!recommendedMaterials.length) {
-        return recommendedMaterials.map(m => ({ ...m }));
-      }
-      if (!prev || prev.length === 0) {
-        return recommendedMaterials.map(m => ({ ...m }));
-      }
-      if (prev.length !== recommendedMaterials.length) {
-        return recommendedMaterials.map(m => ({ ...m }));
-      }
+      if (!recommendedMaterials.length) return recommendedMaterials.map(m => ({ ...m }));
+      if (!prev || prev.length === 0) return recommendedMaterials.map(m => ({ ...m }));
+      if (prev.length !== recommendedMaterials.length) return recommendedMaterials.map(m => ({ ...m }));
       const same = prev.every((m, idx) => {
         const rec = recommendedMaterials[idx];
         return (
@@ -657,31 +652,30 @@ export function OnsiteMakeForm({
   }, [open, recommendedMaterials]);
 
   useEffect(() => {
-    if (open) {
-      setReporter("");
-      setFlavorId(defaultFlavorId);
-      setUseCode(uses[0]?.code ?? "");
-      setOemPartner(oemList[0] ?? "");
-      setOutcome("");
-      setLeftLoc("");
-      setLeftG(0);
-      setLeftGInput("");
-      setExtraPacks(undefined);
-      setExtraMaterials(null);
-      setManufacturedAt(format(new Date(), "yyyy-MM-dd"));
-    }
+    if (!open) return;
+    setReporter("");
+    setFlavorId(defaultFlavorId);
+    setUseCode(uses[0]?.code ?? "");
+    setOemPartner(oemList[0] ?? "");
+    setOutcome("");
+    setLeftLoc("");
+    setLeftG(0);
+    setLeftGInput("");
+    setExtraPacks(undefined);
+    setExtraMaterials(null);
+    setManufacturedAt(format(new Date(), "yyyy-MM-dd"));
   }, [open, defaultFlavorId, oemList, uses]);
 
   const submit = async () => {
-    const packsToSend =
-      typeof extraPacks === "number" && Number.isFinite(extraPacks) ? extraPacks : undefined;
+    const packsToSend = typeof extraPacks === "number" && Number.isFinite(extraPacks) ? extraPacks : undefined;
     if (busy) return;
     if (packsToSend === undefined) return;
     if (extraTotalGrams <= 0) return;
     if (!normalizedUseCode) return;
     if (!reporter) return;
-    const leftover =
-      outcome === "extra" && leftLoc && leftG > 0 ? { loc: leftLoc, grams: leftG } : undefined;
+
+    const leftover = outcome === "extra" && leftLoc && leftG > 0 ? { loc: leftLoc, grams: leftG } : undefined;
+
     const materialsToSend: MaterialLine[] = (extraMaterials ?? recommendedMaterials).map(m => {
       const qty = Number(m.reported_qty ?? 0);
       return {
@@ -693,6 +687,7 @@ export function OnsiteMakeForm({
         source: m.source ?? "entered",
       };
     });
+
     try {
       await onRegister(
         factoryCode,
@@ -733,6 +728,7 @@ export function OnsiteMakeForm({
           </SelectContent>
         </Select>
       </div>
+
       <div className="space-y-2">
         <Label>今回作成パック数</Label>
         <Input
@@ -747,10 +743,9 @@ export function OnsiteMakeForm({
           placeholder="数字を入力してください"
           required
         />
-        <div className="text-xs text-muted-foreground mt-1">
-          目安必要量: {formatGram(extraTotalGrams)}
-        </div>
+        <div className="text-xs text-muted-foreground mt-1">目安必要量: {formatGram(extraTotalGrams)}</div>
       </div>
+
       <div className="grid md:grid-cols-3 gap-3">
         <div className="md:col-span-1">
           <Label>レシピ</Label>
@@ -769,6 +764,7 @@ export function OnsiteMakeForm({
             </SelectContent>
           </Select>
         </div>
+
         <div>
           <Label>用途</Label>
           <Select value={useCode} onValueChange={setUseCode}>
@@ -786,17 +782,16 @@ export function OnsiteMakeForm({
             </SelectContent>
           </Select>
         </div>
+
         <div>
           <Label>製造日</Label>
-          <Input
-            type="date"
-            value={manufacturedAt}
-            onChange={e => setManufacturedAt(e.target.value)}
-          />
+          <Input type="date" value={manufacturedAt} onChange={e => setManufacturedAt(e.target.value)} />
         </div>
       </div>
+
       <div className="rounded-xl border p-3 space-y-3">
         <div className="text-sm font-medium">レシピ：{flavor.liquidName}</div>
+
         {(extraMaterials ?? recommendedMaterials).map((m, idx) => (
           <div key={`${m.ingredient_name}-${idx}`} className="flex items-center gap-3">
             <div className="flex-1">{m.ingredient_name}</div>
@@ -808,9 +803,7 @@ export function OnsiteMakeForm({
                 onChange={e => {
                   const v = Number.parseInt(e.target.value || "0", 10);
                   setExtraMaterials(cur => {
-                    const base = (cur && cur.length ? cur : recommendedMaterials).map(x => ({
-                      ...x,
-                    }));
+                    const base = (cur && cur.length ? cur : recommendedMaterials).map(x => ({ ...x }));
                     if (!base[idx]) {
                       const rec = recommendedMaterials[idx] ?? m;
                       base[idx] = { ...rec };
@@ -824,10 +817,12 @@ export function OnsiteMakeForm({
             </div>
           </div>
         ))}
+
         <div className="text-right text-sm">
           作成量 合計：<span className="font-semibold">{formatGram(extraTotalGrams)}</span>
         </div>
       </div>
+
       <div className="grid md:grid-cols-3 gap-3">
         <div>
           <Label>結果</Label>
@@ -841,6 +836,7 @@ export function OnsiteMakeForm({
             </SelectContent>
           </Select>
         </div>
+
         {outcome === "extra" && (
           <>
             <div>
@@ -860,6 +856,7 @@ export function OnsiteMakeForm({
                 </SelectContent>
               </Select>
             </div>
+
             <div>
               <Label>余り数量（g）</Label>
               <Input
@@ -875,6 +872,7 @@ export function OnsiteMakeForm({
           </>
         )}
       </div>
+
       <div className="flex justify-end gap-2">
         {onCancel && (
           <Button variant="secondary" onClick={onCancel}>
@@ -900,6 +898,8 @@ export function OnsiteMakeForm({
     </div>
   );
 }
+
+/** -------------------- small UI helper -------------------- */
 
 const Field = ({ label, children }: { label: string; children: React.ReactNode }) => (
   <div className="space-y-1 min-w-[120px]">
