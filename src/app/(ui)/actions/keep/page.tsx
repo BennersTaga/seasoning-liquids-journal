@@ -26,7 +26,7 @@ function KeepActionPageInner() {
   const factoryParam = searchParams.get("factory") ?? "";
   const orderIdParam = searchParams.get("order_id") ?? "";
   const mastersQuery = useMasters();
-  const { storageByFactory, factories } = useMemo(
+  const { storageByFactory, factories, reporters } = useMemo(
     () => deriveDataFromMasters(mastersQuery.data),
     [mastersQuery.data],
   );
@@ -41,7 +41,7 @@ function KeepActionPageInner() {
   const requestIdRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = async (values: KeepFormValues) => {
+  const handleSubmit = async (values: KeepFormValues, reporter: string) => {
     if (!targetOrder) return;
     const line = targetOrder.lines[0];
     if (!requestIdRef.current) {
@@ -63,6 +63,7 @@ function KeepActionPageInner() {
             grams: values.grams,
             manufactured_at: values.manufacturedAt,
           },
+          by: reporter,
         },
         { requestId },
       );
@@ -114,6 +115,7 @@ function KeepActionPageInner() {
                 storageByFactory={storageByFactory}
                 mastersLoading={mastersQuery.isLoading || (!mastersQuery.data && !mastersQuery.error)}
                 busy={busy}
+                reporters={reporters}
                 onSubmit={handleSubmit}
                 onCancel={() => router.push(returnTo)}
               />

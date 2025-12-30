@@ -2,7 +2,7 @@
 
 import React from "react";
 import { format } from "date-fns";
-import type { Masters, OrderRow, StorageAggRow } from "@/lib/sheets/types";
+import type { Masters, OrderRow, ReporterRow, StorageAggRow, UseType } from "@/lib/sheets/types";
 
 export type FlavorRecipeItem = { ingredient: string; qty: number; unit: string };
 
@@ -55,6 +55,13 @@ export interface StorageAggEntry {
   manufacturedAt: string;
 }
 
+export interface Reporter {
+  id: string;
+  name: string;
+  factoryCode?: string;
+  sortOrder: number;
+}
+
 export type MadeReport = {
   packs: number;
   grams: number;
@@ -62,9 +69,10 @@ export type MadeReport = {
   result: "extra" | "used";
   leftover?: { location: string; grams: number } | null;
   materials?: MaterialLine[];
+  by?: string;
 };
 
-export type KeepFormValues = { location: string; grams: number; manufacturedAt: string };
+export type KeepFormValues = { location: string; grams: number; manufacturedAt: string; by?: string };
 
 export const defaultFlavor: FlavorWithRecipe = {
   id: "",
@@ -90,7 +98,44 @@ export const genLotId = (factoryCode: string, seq: number, d = new Date()) =>
 export const lotIdPattern = /^([A-Z0-9]+-\d{8}-\d{3})(?:-(\d+))?$/;
 export const isChildLot = (lotId: string) => Boolean(lotId.match(lotIdPattern)?.[2]);
 
-export function deriveDataFromMasters(masters?: Masters) {
+export interface DerivedMastersData {
+  factories: { code: string; name: string }[];
+  storageByFactory: Record<string, string[]>;
+  flavors: FlavorWithRecipe[];
+  oemList: string[];
+  uses: { code: string; name: string; type: UseType }[];
+  allowedByUse: Record<string, Set<string>>;
+  reporters: Reporter[];
+}
+
+function normalizeReporterSortOrder(raw: ReporterRow["sort_order"]) {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (raw === null || raw === undefined) return Number.MAX_SAFE_INTEGER;
+  const trimmed = String(raw).trim();
+  if (!trimmed) return Number.MAX_SAFE_INTEGER;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
+}
+
+function toReporterId(row: ReporterRow) {
+  const id = (row.reporter_id || row.reporter_name || "").trim();
+  return id;
+}
+
+function toReporterName(row: ReporterRow) {
+  const name = (row.reporter_name || row.reporter_id || "").trim();
+  return name;
+}
+
+function isActiveReporterRow(row: ReporterRow) {
+  return String(row.active ?? "").toLowerCase() !== "no";
+}
+
+function hasReporterIdentityRow(row: ReporterRow) {
+  return toReporterId(row).length > 0 && toReporterName(row).length > 0;
+}
+
+export function deriveDataFromMasters(masters?: Masters): DerivedMastersData {
   const factories =
     masters?.factories?.map(factory => ({
       code: factory.factory_code,
@@ -143,7 +188,24 @@ export function deriveDataFromMasters(masters?: Masters) {
     allowedByUse[row.use_code].add(row.flavor_id);
   });
 
-  return { factories, storageByFactory, flavors, oemList, uses, allowedByUse };
+  const reporters: Reporter[] =
+    masters?.reporters
+      ?.filter(isActiveReporterRow)
+      ?.filter(hasReporterIdentityRow)
+      ?.map(rep => ({
+        id: toReporterId(rep),
+        name: toReporterName(rep),
+        factoryCode: rep.factory_code?.trim() || undefined,
+        sortOrder: normalizeReporterSortOrder(rep.sort_order),
+      }))
+      ?.sort((a, b) => {
+        if (a.sortOrder === b.sortOrder) {
+          return a.name.localeCompare(b.name, "ja");
+        }
+        return a.sortOrder - b.sortOrder;
+      }) ?? [];
+
+  return { factories, storageByFactory, flavors, oemList, uses, allowedByUse, reporters };
 }
 
 export function normalizeOrders(rows?: OrderRow[]): OrderCard[] {
