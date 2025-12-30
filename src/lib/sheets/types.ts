@@ -2,10 +2,10 @@ export type UseType = 'fissule' | 'oem';
 
 export interface RecipeRow { flavor_id: string; row_no: number; ingredient_name: string; qty: number; unit: string }
 export interface ReporterRow {
-  reporter_id?: string;
-  reporter_name?: string;
+  reporter_id?: string | null;
+  reporter_name?: string | null;
   factory_code?: string | null;
-  active?: string | null;
+  active?: string | number | null;
   sort_order?: number | string | null;
 }
 export interface Masters {

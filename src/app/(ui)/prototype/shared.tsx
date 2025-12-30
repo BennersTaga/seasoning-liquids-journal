@@ -2,7 +2,7 @@
 
 import React from "react";
 import { format } from "date-fns";
-import type { Masters, OrderRow, ReporterRow, StorageAggRow } from "@/lib/sheets/types";
+import type { Masters, OrderRow, ReporterRow, StorageAggRow, UseType } from "@/lib/sheets/types";
 
 export type FlavorRecipeItem = { ingredient: string; qty: number; unit: string };
 
@@ -62,6 +62,16 @@ export interface Reporter {
   sortOrder: number;
 }
 
+export interface DerivedMastersData {
+  factories: { code: string; name: string }[];
+  storageByFactory: Record<string, string[]>;
+  flavors: FlavorWithRecipe[];
+  oemList: string[];
+  uses: { code: string; name: string; type: UseType }[];
+  allowedByUse: Record<string, Set<string>>;
+  reporters: Reporter[];
+}
+
 export type MadeReport = {
   packs: number;
   grams: number;
@@ -115,7 +125,15 @@ function toReporterName(row: ReporterRow) {
   return (row.reporter_name || row.reporter_id || "").trim();
 }
 
-export function deriveDataFromMasters(masters?: Masters) {
+function isActiveReporterRow(row: ReporterRow) {
+  return String(row.active ?? "").toLowerCase() !== "no";
+}
+
+function hasReporterIdentityRow(row: ReporterRow) {
+  return toReporterId(row).length > 0 && toReporterName(row).length > 0;
+}
+
+export function deriveDataFromMasters(masters?: Masters): DerivedMastersData {
   const factories =
     masters?.factories?.map(factory => ({
       code: factory.factory_code,
@@ -170,14 +188,14 @@ export function deriveDataFromMasters(masters?: Masters) {
 
   const reporters: Reporter[] =
     masters?.reporters
-      ?.filter(rep => String(rep.active || "").toLowerCase() !== "no")
+      ?.filter(isActiveReporterRow)
+      ?.filter(hasReporterIdentityRow)
       ?.map(rep => ({
         id: toReporterId(rep),
         name: toReporterName(rep),
         factoryCode: rep.factory_code || undefined,
         sortOrder: normalizeReporterSortOrder(rep.sort_order),
       }))
-      ?.filter(rep => !!rep.id && !!rep.name)
       ?.sort((a, b) => {
         if (a.sortOrder === b.sortOrder) {
           return a.name.localeCompare(b.name, "ja");
