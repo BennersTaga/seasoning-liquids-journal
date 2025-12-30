@@ -1,14 +1,22 @@
 'use client';
 
-import React, { useMemo } from "react";
+import React, { Suspense, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useMasters } from "@/hooks/useMasters";
 import { useOrders } from "@/hooks/useOrders";
-import { deriveDataFromMasters, normalizeOrders } from "@/app/(ui)/prototype/page";
+import { deriveDataFromMasters, normalizeOrders } from "@/app/(ui)/prototype/shared";
 
 export default function SkipActionPage() {
+  return (
+    <Suspense fallback={null}>
+      <SkipActionPageInner />
+    </Suspense>
+  );
+}
+
+function SkipActionPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const returnTo = searchParams.get("return_to") || "/office";

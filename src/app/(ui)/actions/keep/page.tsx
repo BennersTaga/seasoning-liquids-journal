@@ -1,17 +1,25 @@
 'use client';
 
-import React, { useMemo, useRef, useState } from "react";
+import React, { Suspense, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { apiPost } from "@/lib/gas";
 import { useMasters } from "@/hooks/useMasters";
 import { useOrders } from "@/hooks/useOrders";
-import { deriveDataFromMasters, genId, normalizeOrders, type KeepFormValues } from "@/app/(ui)/prototype/page";
+import { deriveDataFromMasters, genId, normalizeOrders, type KeepFormValues } from "@/app/(ui)/prototype/shared";
 import { KeepActionForm } from "@/components/actions/action-forms";
 import { mutate } from "swr";
 
 export default function KeepActionPage() {
+  return (
+    <Suspense fallback={null}>
+      <KeepActionPageInner />
+    </Suspense>
+  );
+}
+
+function KeepActionPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const returnTo = searchParams.get("return_to") || "/office";

@@ -22,7 +22,7 @@ import {
   defaultFlavor,
   formatGram,
   selectFallback,
-} from "@/app/(ui)/prototype/page";
+} from "@/app/(ui)/prototype/shared";
 
 type KeepActionFormProps = {
   open?: boolean;

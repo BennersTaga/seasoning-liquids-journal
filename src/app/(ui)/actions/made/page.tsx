@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useRef, useState } from "react";
+import React, { Suspense, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,11 +15,19 @@ import {
   genId,
   normalizeOrders,
   type MadeReport,
-} from "@/app/(ui)/prototype/page";
+} from "@/app/(ui)/prototype/shared";
 import { MadeActionForm } from "@/components/actions/action-forms";
 import { mutate } from "swr";
 
 export default function MadeActionPage() {
+  return (
+    <Suspense fallback={null}>
+      <MadeActionPageInner />
+    </Suspense>
+  );
+}
+
+function MadeActionPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const returnTo = searchParams.get("return_to") || "/office";

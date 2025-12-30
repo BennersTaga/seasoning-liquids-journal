@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,12 +15,20 @@ import {
   defaultFlavor,
   normalizeOrders,
   type MaterialLine,
-} from "@/app/(ui)/prototype/page";
+} from "@/app/(ui)/prototype/shared";
 import { useMasters } from "@/hooks/useMasters";
 import { useOrders } from "@/hooks/useOrders";
 import { apiPost } from "@/lib/gas";
 
 export default function ExtraActionPage() {
+  return (
+    <Suspense fallback={null}>
+      <ExtraActionPageInner />
+    </Suspense>
+  );
+}
+
+function ExtraActionPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const returnTo = searchParams.get("return_to") || "/office";
