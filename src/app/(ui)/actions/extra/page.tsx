@@ -36,17 +36,23 @@ function ExtraActionPageInner() {
   const defaultFlavorParam = searchParams.get("flavor_id") ?? "";
 
   const mastersQuery = useMasters();
-  const { flavors, storageByFactory, oemList, uses, factories } = useMemo(
+
+  const { flavors, storageByFactory, oemList, uses, factories, reporters = [] } = useMemo(
     () => deriveDataFromMasters(mastersQuery.data),
     [mastersQuery.data],
   );
+
   const findFlavor = useMemo(
-    () => (id: string) => flavors.find(fl => fl.id === id) ?? flavors[0] ?? { ...defaultFlavor, id },
+    () =>
+      (id: string) =>
+        flavors.find(fl => fl.id === id) ?? flavors[0] ?? { ...defaultFlavor, id },
     [flavors],
   );
+
   const factoryCode = factoryParam || factories[0]?.code || "";
   const ordersQuery = useOrders(factoryCode || undefined, false);
   const orders = useMemo(() => normalizeOrders(ordersQuery.data), [ordersQuery.data]);
+
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestIdRef = useRef<string | null>(null);
@@ -64,9 +70,7 @@ function ExtraActionPageInner() {
       if (Number.isNaN(numeric)) return;
       const key = `${fCode}-${datePart}`;
       const candidate = numeric + 1;
-      if (!next[key] || next[key] < candidate) {
-        next[key] = candidate;
-      }
+      if (!next[key] || next[key] < candidate) next[key] = candidate;
     });
     seqRef.current = next;
   }, [orders]);
@@ -78,6 +82,7 @@ function ExtraActionPageInner() {
     useCode: string,
     producedG: number,
     manufacturedAt: string,
+    reporter: string,
     oemPartner?: string,
     leftover?: { loc: string; grams: number },
     _lotId?: string,
@@ -90,10 +95,10 @@ function ExtraActionPageInner() {
     const key = `${factory}-${dateSegment}`;
     const seq = seqRef.current[key] ?? 1;
     const lotId = genLotId(factory, seq, date);
-    if (!requestIdRef.current) {
-      requestIdRef.current = genId();
-    }
+
+    if (!requestIdRef.current) requestIdRef.current = genId();
     const requestId = requestIdRef.current as string;
+
     const payload = {
       factory_code: factory,
       flavor_id: flavorId,
@@ -102,6 +107,7 @@ function ExtraActionPageInner() {
       produced_grams: producedG,
       manufactured_at: manufacturedAt,
       oem_partner: useType === "oem" ? oemPartner ?? null : null,
+      by: reporter || "",
       leftover: leftover && leftover.grams > 0 ? { location: leftover.loc, grams: leftover.grams } : null,
       generated_lot_id: lotId,
       materials:
@@ -116,14 +122,18 @@ function ExtraActionPageInner() {
           : undefined,
       packs: Number.isFinite(packs) ? Number(packs) : 0,
     };
+
     try {
       setBusy(true);
       setError(null);
+
       await apiPost("onsite-make", payload, { requestId });
+
       await Promise.all([
         mutate(["orders", factory, false]),
         mutate(["storage-agg", factory]),
       ]);
+
       seqRef.current[key] = seq + 1;
       requestIdRef.current = null;
       router.push(returnTo);
@@ -147,6 +157,7 @@ function ExtraActionPageInner() {
         <Button variant="ghost" onClick={() => router.push(returnTo)}>
           ← 戻る
         </Button>
+
         <Card className="shadow-sm">
           <CardHeader>
             <CardTitle>＋ 追加で作成</CardTitle>
@@ -157,6 +168,7 @@ function ExtraActionPageInner() {
               </div>
             )}
           </CardHeader>
+
           <CardContent>
             <OnsiteMakeForm
               open
@@ -170,6 +182,7 @@ function ExtraActionPageInner() {
               storageByFactory={storageByFactory}
               mastersLoading={mastersQuery.isLoading || (!mastersQuery.data && !mastersQuery.error)}
               uses={uses}
+              reporters={reporters}
               onCancel={() => router.push(returnTo)}
             />
           </CardContent>

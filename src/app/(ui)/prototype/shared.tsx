@@ -55,6 +55,14 @@ export interface StorageAggEntry {
   manufacturedAt: string;
 }
 
+/** UI用：報告者 */
+export interface Reporter {
+  id: string;              // reporter_id（無ければ reporter_name）
+  name: string;            // reporter_name（表示名）
+  factoryCode?: string;    // 工場限定（任意）
+  sortOrder: number;       // 表示順（未設定は末尾）
+}
+
 export type MadeReport = {
   packs: number;
   grams: number;
@@ -64,6 +72,7 @@ export type MadeReport = {
   materials?: MaterialLine[];
 };
 
+/** 保管フォームの入力値。by はここに含めず、ページ側で別管理して送る */
 export type KeepFormValues = { location: string; grams: number; manufacturedAt: string };
 
 export const defaultFlavor: FlavorWithRecipe = {
@@ -137,13 +146,38 @@ export function deriveDataFromMasters(masters?: Masters) {
 
   const allowedByUse: Record<string, Set<string>> = {};
   masters?.use_flavors?.forEach(row => {
-    if (!allowedByUse[row.use_code]) {
-      allowedByUse[row.use_code] = new Set();
-    }
+    if (!allowedByUse[row.use_code]) allowedByUse[row.use_code] = new Set();
     allowedByUse[row.use_code].add(row.flavor_id);
   });
 
-  return { factories, storageByFactory, flavors, oemList, uses, allowedByUse };
+  // ★報告者（未対応環境でも落ちないように常に配列で返す）
+  const reporters: Reporter[] =
+    masters?.reporters
+      ?.filter(rep => String((rep as any).active || "").toLowerCase() !== "no")
+      ?.map(rep => {
+        const id = (rep as any).reporter_id || (rep as any).reporter_name || "";
+        const name = (rep as any).reporter_name || (rep as any).reporter_id || "";
+        const factoryCode = (rep as any).factory_code || undefined;
+
+        const raw = (rep as any).sort_order as number | string | null | undefined;
+        const sortOrder =
+          typeof raw === "number" && Number.isFinite(raw)
+            ? raw
+            : raw == null || String(raw).trim() === ""
+              ? Number.MAX_SAFE_INTEGER
+              : Number(String(raw));
+
+        return {
+          id,
+          name,
+          factoryCode,
+          sortOrder: Number.isFinite(sortOrder) ? sortOrder : Number.MAX_SAFE_INTEGER,
+        };
+      })
+      ?.filter(r => !!r.id && !!r.name)
+      ?.sort((a, b) => (a.sortOrder - b.sortOrder) || a.name.localeCompare(b.name, "ja")) ?? [];
+
+  return { factories, storageByFactory, flavors, oemList, uses, allowedByUse, reporters };
 }
 
 export function normalizeOrders(rows?: OrderRow[]): OrderCard[] {

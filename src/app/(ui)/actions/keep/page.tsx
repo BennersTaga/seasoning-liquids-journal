@@ -25,32 +25,38 @@ function KeepActionPageInner() {
   const returnTo = searchParams.get("return_to") || "/office";
   const factoryParam = searchParams.get("factory") ?? "";
   const orderIdParam = searchParams.get("order_id") ?? "";
+
   const mastersQuery = useMasters();
-  const { storageByFactory, factories } = useMemo(
+
+  const { storageByFactory, factories, reporters = [] } = useMemo(
     () => deriveDataFromMasters(mastersQuery.data),
     [mastersQuery.data],
   );
+
   const factoryCode = factoryParam || factories[0]?.code || "";
   const ordersQuery = useOrders(factoryCode || undefined, false);
   const orders = useMemo(() => normalizeOrders(ordersQuery.data), [ordersQuery.data]);
+
   const targetOrder = useMemo(
     () => orders.find(order => order.orderId === orderIdParam),
     [orders, orderIdParam],
   );
+
   const [busy, setBusy] = useState(false);
   const requestIdRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = async (values: KeepFormValues) => {
+  const handleSubmit = async (values: KeepFormValues, reporter: string) => {
     if (!targetOrder) return;
     const line = targetOrder.lines[0];
-    if (!requestIdRef.current) {
-      requestIdRef.current = genId();
-    }
+
+    if (!requestIdRef.current) requestIdRef.current = genId();
     const requestId = requestIdRef.current as string;
+
     try {
       setBusy(true);
       setError(null);
+
       await apiPost(
         "action",
         {
@@ -63,13 +69,16 @@ function KeepActionPageInner() {
             grams: values.grams,
             manufactured_at: values.manufacturedAt,
           },
+          by: reporter || "",
         },
         { requestId },
       );
+
       await Promise.all([
         mutate(["storage-agg", targetOrder.factoryCode]),
         mutate(["orders", targetOrder.factoryCode, false]),
       ]);
+
       requestIdRef.current = null;
       router.push(returnTo);
     } catch (err) {
@@ -88,10 +97,12 @@ function KeepActionPageInner() {
         <Button variant="ghost" onClick={() => router.push(returnTo)}>
           ← 戻る
         </Button>
+
         <Card className="shadow-sm">
           <CardHeader>
             <CardTitle>保管登録</CardTitle>
             <CardDescription>ダイアログで行っていた保管登録をページで行います。</CardDescription>
+
             {targetOrder && (
               <div className="text-sm text-muted-foreground mt-2">
                 ロット: {targetOrder.lotId} / 工場: {targetOrder.factoryCode}
@@ -106,6 +117,7 @@ function KeepActionPageInner() {
               </div>
             )}
           </CardHeader>
+
           <CardContent>
             {targetOrder ? (
               <KeepActionForm
@@ -114,6 +126,7 @@ function KeepActionPageInner() {
                 storageByFactory={storageByFactory}
                 mastersLoading={mastersQuery.isLoading || (!mastersQuery.data && !mastersQuery.error)}
                 busy={busy}
+                reporters={reporters}
                 onSubmit={handleSubmit}
                 onCancel={() => router.push(returnTo)}
               />
