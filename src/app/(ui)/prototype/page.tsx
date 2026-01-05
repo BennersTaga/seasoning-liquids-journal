@@ -155,6 +155,7 @@ function Office({
   const [useCode, setUseCode] = useState(uses[0]?.code ?? "");
   const [packs, setPacks] = useState(100);
   const [packsInput, setPacksInput] = useState("100");
+  const [deadlineAt, setDeadlineAt] = useState(format(new Date(), "yyyy-MM-dd"));
   const [oemPartner, setOemPartner] = useState(oemList[0] ?? "");
   const [oemGrams, setOemGrams] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -282,6 +283,7 @@ function Office({
             flavor_id: flavor,
             use_type: "fissule" as const,
             use_code: useCode,
+            deadline_at: deadlineAt,
             packs,
             required_grams: packs * (findFlavor(flavor)?.packToGram ?? 0),
             oem_partner: "",
@@ -294,6 +296,7 @@ function Office({
             flavor_id: flavor,
             use_type: "oem" as const,
             use_code: useCode,
+            deadline_at: deadlineAt,
             packs: 0,
             required_grams: oemGrams,
             oem_partner: oemPartner ?? "",
@@ -328,6 +331,7 @@ function Office({
     packs,
     oemPartner,
     oemGrams,
+    deadlineAt,
     findFlavor,
     onRequestSuccess,
     onRequestError,
@@ -403,23 +407,34 @@ function Office({
             </Select>
           </div>
           {derivedUseType === "fissule" ? (
-            <div>
-              <Label>パック数</Label>
-              <Input
-                type="number"
-                value={packsInput}
-                onChange={e => {
-                  const v = e.target.value;
-                  setPacksInput(v);
-                  const n = Number.parseInt(v, 10);
-                  setPacks(Number.isNaN(n) ? 0 : n);
-                }}
-                className="w-full"
-              />
-              <div className="text-xs text-muted-foreground mt-1">
-                必要量: {formatGram(packs * (findFlavor(flavor)?.packToGram ?? 0))}
+            <>
+              <div>
+                <Label>パック数</Label>
+                <Input
+                  type="number"
+                  value={packsInput}
+                  onChange={e => {
+                    const v = e.target.value;
+                    setPacksInput(v);
+                    const n = Number.parseInt(v, 10);
+                    setPacks(Number.isNaN(n) ? 0 : n);
+                  }}
+                  className="w-full"
+                />
+                <div className="text-xs text-muted-foreground mt-1">
+                  必要量: {formatGram(packs * (findFlavor(flavor)?.packToGram ?? 0))}
+                </div>
               </div>
-            </div>
+              <div>
+                <Label>製造締切日</Label>
+                <Input
+                  type="date"
+                  value={deadlineAt}
+                  onChange={e => setDeadlineAt(e.target.value)}
+                  className="w-full"
+                />
+              </div>
+            </>
           ) : (
             <>
               <div>
@@ -448,6 +463,15 @@ function Office({
                   type="number"
                   value={oemGrams}
                   onChange={e => setOemGrams(Number.parseInt(e.target.value || "0", 10))}
+                  className="w-full"
+                />
+              </div>
+              <div>
+                <Label>製造締切日</Label>
+                <Input
+                  type="date"
+                  value={deadlineAt}
+                  onChange={e => setDeadlineAt(e.target.value)}
                   className="w-full"
                 />
               </div>
@@ -836,6 +860,7 @@ function FloorTable({
           <thead className="sticky top-0 bg-amber-50 text-slate-700">
             <tr>
               <th className="px-4 py-3 text-left font-semibold">製造指示日</th>
+              <th className="px-4 py-3 text-left font-semibold">製造締切日</th>
               <th className="px-4 py-3 text-left font-semibold">製造日</th>
               <th className="px-4 py-3 text-left font-semibold">味付け</th>
               <th className="px-4 py-3 text-left font-semibold">用途</th>
@@ -880,7 +905,7 @@ function FloorTable({
             })}
             {activeOrders.length === 0 && (
               <tr>
-                <td colSpan={10} className="px-3 py-10 text-center text-slate-400">
+                <td colSpan={11} className="px-3 py-10 text-center text-slate-400">
                   表示できるデータがありません
                 </td>
               </tr>
@@ -973,6 +998,7 @@ function FloorTableRow({
   return (
     <tr className={`align-top ${status === "全量使用" ? "opacity-70" : ""}`}>
       <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">{order.orderedAt}</td>
+      <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">{order.deadlineAt ?? "-"}</td>
       <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">{storageEntry?.manufacturedAt || "-"}</td>
       <td className="px-4 py-3 text-sm text-slate-700">
         <div className="font-semibold">{flavorName}</div>
@@ -1172,6 +1198,7 @@ function FloorChildRow({
   return (
     <tr className="align-top bg-orange-50/60">
       <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">-</td>
+      <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">{parentOrder.deadlineAt ?? "-"}</td>
       <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">{storageEntry.manufacturedAt}</td>
       <td className="px-4 py-3 text-sm text-slate-700">
         <div className="flex flex-col gap-1">

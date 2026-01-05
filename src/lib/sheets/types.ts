@@ -31,6 +31,7 @@ export interface OrderRow {
   lot_id: string;
   factory_code: string;
   ordered_at: string;
+  deadline_at?: string;
   flavor_id: string;
   use_type: UseType;
   use_code?: string;

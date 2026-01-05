@@ -41,6 +41,7 @@ export interface OrderCard {
   lotId: string;
   factoryCode: string;
   orderedAt: string;
+  deadlineAt?: string;
   lines: OrderLine[];
   archived: boolean;
 }
@@ -250,12 +251,14 @@ export function normalizeOrders(rows?: OrderRow[]): OrderCard[] {
     if (existing) {
       existing.lines.push(line);
       existing.archived = row.archived;
+      existing.deadlineAt = row.deadline_at ?? existing.deadlineAt;
     } else {
       map.set(row.order_id, {
         orderId: row.order_id,
         lotId: row.lot_id,
         factoryCode: row.factory_code,
         orderedAt: row.ordered_at,
+        deadlineAt: row.deadline_at ?? undefined,
         lines: [line],
         archived: row.archived,
       });
