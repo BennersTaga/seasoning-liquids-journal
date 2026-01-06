@@ -166,6 +166,12 @@ function Office({
     [uses, useCode],
   );
   const derivedUseType: "fissule" | "oem" = selectedUse?.type === "oem" ? "oem" : "fissule";
+  const quantityMode: "packs" | "grams" = useMemo(() => {
+    const normalizedUseName = (selectedUse?.name ?? "").replace(/\s+/g, "");
+    if (normalizedUseName === "OEM(送付分)") return "packs";
+    if (normalizedUseName === "玄海丼(送付分)" || normalizedUseName === "玄海丼(製造分)") return "grams";
+    return derivedUseType === "oem" ? "grams" : "packs";
+  }, [derivedUseType, selectedUse?.name]);
   const allowedSet = useMemo(() => allowedByUse[useCode], [allowedByUse, useCode]);
   const flavorOptions = useMemo(() => {
     if (allowedSet && allowedSet.size > 0) {
@@ -262,8 +268,9 @@ function Office({
   const createOrder = useCallback(async () => {
     if (busy) return;
     if (!factory || !flavor || !useCode) return;
-    if (derivedUseType === "fissule" && packs <= 0) return;
-    if (derivedUseType === "oem" && (!oemPartner || oemGrams <= 0)) return;
+    if (quantityMode === "packs" && packs <= 0) return;
+    if (quantityMode === "grams" && oemGrams <= 0) return;
+    if (derivedUseType === "oem" && !oemPartner) return;
     if (!requestIdRef.current) {
       requestIdRef.current = genId();
     }
@@ -274,6 +281,9 @@ function Office({
     const seq = seqRef.current[key] ?? 1;
     const lotId = genLotId(factory, seq, today);
     const orderedAt = format(today, "yyyy-MM-dd");
+    const packsValue = quantityMode === "packs" ? packs : 0;
+    const requiredGrams =
+      quantityMode === "packs" ? packs * (findFlavor(flavor)?.packToGram ?? 0) : oemGrams;
     const body =
       derivedUseType === "fissule"
         ? {
@@ -284,8 +294,8 @@ function Office({
             use_type: "fissule" as const,
             use_code: useCode,
             deadline_at: deadlineAt,
-            packs,
-            required_grams: packs * (findFlavor(flavor)?.packToGram ?? 0),
+            packs: packsValue,
+            required_grams: requiredGrams,
             oem_partner: "",
             archived: false,
           }
@@ -297,8 +307,8 @@ function Office({
             use_type: "oem" as const,
             use_code: useCode,
             deadline_at: deadlineAt,
-            packs: 0,
-            required_grams: oemGrams,
+            packs: packsValue,
+            required_grams: requiredGrams,
             oem_partner: oemPartner ?? "",
             archived: false,
           };
@@ -328,6 +338,7 @@ function Office({
     flavor,
     useCode,
     derivedUseType,
+    quantityMode,
     packs,
     oemPartner,
     oemGrams,
@@ -406,77 +417,66 @@ function Office({
               </SelectContent>
             </Select>
           </div>
-          {derivedUseType === "fissule" ? (
-            <>
-              <div>
-                <Label>パック数</Label>
-                <Input
-                  type="number"
-                  value={packsInput}
-                  onChange={e => {
-                    const v = e.target.value;
-                    setPacksInput(v);
-                    const n = Number.parseInt(v, 10);
-                    setPacks(Number.isNaN(n) ? 0 : n);
-                  }}
-                  className="w-full"
-                />
-                <div className="text-xs text-muted-foreground mt-1">
-                  必要量: {formatGram(packs * (findFlavor(flavor)?.packToGram ?? 0))}
-                </div>
+          {derivedUseType === "oem" ? (
+            <div>
+              <Label>OEM先</Label>
+              <Select value={oemPartner} onValueChange={setOemPartner}>
+                <SelectTrigger
+                  disabled={oemDisabled}
+                  className="w-full text-left h-auto min-h-[44px] py-2 whitespace-normal break-words"
+                >
+                  <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {oemList.length
+                    ? oemList.map(x => (
+                        <SelectItem key={x} value={x}>
+                          {x}
+                        </SelectItem>
+                      ))
+                    : selectFallback(mastersLoading)}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : null}
+          {quantityMode === "packs" ? (
+            <div>
+              <Label>パック数</Label>
+              <Input
+                type="number"
+                value={packsInput}
+                onChange={e => {
+                  const v = e.target.value;
+                  setPacksInput(v);
+                  const n = Number.parseInt(v, 10);
+                  setPacks(Number.isNaN(n) ? 0 : n);
+                }}
+                className="w-full"
+              />
+              <div className="text-xs text-muted-foreground mt-1">
+                必要量: {formatGram(packs * (findFlavor(flavor)?.packToGram ?? 0))}
               </div>
-              <div>
-                <Label>製造締切日</Label>
-                <Input
-                  type="date"
-                  value={deadlineAt}
-                  onChange={e => setDeadlineAt(e.target.value)}
-                  className="w-full"
-                />
-              </div>
-            </>
+            </div>
           ) : (
-            <>
-              <div>
-                <Label>OEM先</Label>
-                <Select value={oemPartner} onValueChange={setOemPartner}>
-                  <SelectTrigger
-                    disabled={oemDisabled}
-                    className="w-full text-left h-auto min-h-[44px] py-2 whitespace-normal break-words"
-                  >
-                    <SelectValue placeholder={mastersLoading ? "読み込み中..." : "未設定"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {oemList.length
-                      ? oemList.map(x => (
-                          <SelectItem key={x} value={x}>
-                            {x}
-                          </SelectItem>
-                        ))
-                      : selectFallback(mastersLoading)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label>作成グラム数（g）</Label>
-                <Input
-                  type="number"
-                  value={oemGrams}
-                  onChange={e => setOemGrams(Number.parseInt(e.target.value || "0", 10))}
-                  className="w-full"
-                />
-              </div>
-              <div>
-                <Label>製造締切日</Label>
-                <Input
-                  type="date"
-                  value={deadlineAt}
-                  onChange={e => setDeadlineAt(e.target.value)}
-                  className="w-full"
-                />
-              </div>
-            </>
+            <div>
+              <Label>作成グラム数（g）</Label>
+              <Input
+                type="number"
+                value={oemGrams}
+                onChange={e => setOemGrams(Number.parseInt(e.target.value || "0", 10))}
+                className="w-full"
+              />
+            </div>
           )}
+          <div>
+            <Label>製造締切日</Label>
+            <Input
+              type="date"
+              value={deadlineAt}
+              onChange={e => setDeadlineAt(e.target.value)}
+              className="w-full"
+            />
+          </div>
           <div className="flex gap-3">
             <Button onClick={createOrder} disabled={busy}>
               チケットを登録
