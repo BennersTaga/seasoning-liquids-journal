@@ -175,20 +175,11 @@ export function deriveDataFromMasters(masters?: Masters): DerivedMastersData {
   const oemList = masters?.oem_partners?.map(partner => partner.partner_name) ?? [];
 
   const uses =
-    masters?.uses?.map(u => {
-      const name = (u.use_name ?? "").trim();
-      let type: UseType = u.use_type;
-      if (name === "OEM(送付分)") {
-        type = "fissule";
-      } else if (name === "玄海丼(送付分)" || name === "玄海丼(製造分)") {
-        type = "oem";
-      }
-      return {
-        code: u.use_code,
-        name: u.use_name,
-        type,
-      };
-    }) ?? [];
+    masters?.uses?.map(u => ({
+      code: u.use_code,
+      name: u.use_name,
+      type: u.use_type,
+    })) ?? [];
 
   const allowedByUse: Record<string, Set<string>> = {};
   masters?.use_flavors?.forEach(row => {
